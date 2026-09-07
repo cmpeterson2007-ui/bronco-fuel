@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0033A0" />
+  <title>Bronco Fuel — Cafeteria Meal Planner</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <meta name="theme-color" content="#0033A0" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="application-name" content="Bronco Fuel" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-head">
+    <div class="head-top">
+      <div><h1>🍽️ Bronco Fuel</h1><p class="tagline">Hit your macros with what the dining hall is actually serving.</p></div>
+      <label class="theme-control">Theme
+        <select id="theme-select" aria-label="Color theme">
+          <option value="light">☀️ Light</option>
+          <option value="tan">🌾 Tan</option>
+          <option value="dark">🌙 Dark</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <details class="card" open id="setup">
+      <summary>Setup &amp; goals</summary>
+
+      <div class="field-row">
+        <label>School
+          <select id="school"></select>
+        </label>
+        <label>Dining location
+          <select id="location"></select>
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label>Planning period
+          <select id="plan-mode">
+            <option value="week">This week</option>
+            <option value="today">Today only</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="presets">
+        <button type="button" data-preset="cut">🔥 Cut</button>
+        <button type="button" data-preset="maintain">⚖️ Maintain</button>
+        <button type="button" data-preset="bulk">💪 Bulk</button>
+      </div>
+
+      <div class="field-row">
+        <label>Daily calories
+          <input id="cal" type="number" inputmode="numeric" min="800" max="6000" step="50" />
+        </label>
+        <label>Protein goal (g)
+          <input id="protein" type="number" inputmode="numeric" min="20" max="400" step="5" />
+        </label>
+      </div>
+      <div class="field-row">
+        <label>Fat cap (g) <span class="dim">optional</span>
+          <input id="fatmax" type="number" inputmode="numeric" min="10" max="300" step="5" placeholder="—" />
+        </label>
+        <label>Carb cap (g) <span class="dim">optional</span>
+          <input id="carbmax" type="number" inputmode="numeric" min="20" max="600" step="10" placeholder="—" />
+        </label>
+      </div>
+
+      <fieldset class="meals-field">
+        <legend>Meals &amp; calorie split (%)</legend>
+        <div class="meal-row">
+          <label class="check"><input type="checkbox" id="meal-breakfast" /> Breakfast</label>
+          <input id="split-breakfast" type="number" inputmode="numeric" min="5" max="80" />
+        </div>
+        <div class="meal-row">
+          <label class="check"><input type="checkbox" id="meal-lunch" /> Lunch</label>
+          <input id="split-lunch" type="number" inputmode="numeric" min="5" max="80" />
+        </div>
+        <div class="meal-row">
+          <label class="check"><input type="checkbox" id="meal-dinner" /> Dinner</label>
+          <input id="split-dinner" type="number" inputmode="numeric" min="5" max="80" />
+        </div>
+        <p class="dim small">Weekend “Brunch” automatically covers breakfast + lunch.</p>
+      </fieldset>
+
+      <details class="station-prefs" id="station-prefs">
+        <summary>Favorite stations</summary>
+        <p class="dim small">Choose the stations you prefer for each meal. Bronco Fuel will favor those stations when several foods fit your nutrition goals.</p>
+        <div id="station-preference-options" class="station-pref-options">
+          <div class="dim small">Station choices will appear after a menu has been loaded.</div>
+        </div>
+      </details>
+
+      <fieldset>
+        <legend>Diet</legend>
+        <label class="check"><input type="checkbox" id="veg" /> Vegetarian</label>
+        <label class="check"><input type="checkbox" id="vegan" /> Vegan</label>
+        <div class="dim small" style="margin-top:.5rem">Avoid allergens:</div>
+        <div id="allergens" class="chips"></div>
+      </fieldset>
+
+      <button type="button" id="reset-excluded" class="linkish">Reset excluded items</button>
+    </details>
+
+    <details class="card" id="exercise-card">
+      <summary>Exercise &amp; recovery</summary>
+      <p class="dim small">Add exercise to increase today’s available calories. Estimates use MET values from the 2024 Adult Compendium of Physical Activities; actual burn varies by person.</p>
+      <form id="exercise-form">
+        <div class="field-row">
+          <label>Date<input id="exercise-date" type="date" required /></label>
+          <label>Activity<select id="exercise-activity">
+            <option value="lifting">Weight lifting</option><option value="running">Running</option><option value="rucking">Rucking</option><option value="swimming">Swimming</option><option value="walking">Walking</option>
+          </select></label>
+        </div>
+        <div class="field-row">
+          <label>Time (minutes)<input id="exercise-minutes" type="number" min="1" step="1" required /></label>
+          <label>Body weight (lb)<input id="exercise-weight" type="number" min="50" step="1" required /></label>
+        </div>
+        <div class="field-row">
+          <label>Running/walking/ruck pace (min/mile)<input id="exercise-pace" type="number" min="3" max="30" step="0.1" placeholder="e.g. 9.0" /></label>
+          <label>Ruck weight (lb)<input id="exercise-ruck" type="number" min="0" step="1" placeholder="e.g. 40" /></label>
+        </div>
+        <button class="primary" type="button" id="add-exercise">Add exercise</button>
+      </form>
+      <div id="exercise-log" class="exercise-list"></div>
+    </details>
+
+    <div class="actions">
+      <button id="build" class="primary">Build my week 🗓️</button>
+      <button id="retry" hidden>Retry connection</button>
+    </div>
+
+    <div id="status" class="status" hidden></div>
+
+    <div id="results"></div>
+
+    <details class="card" id="history" open>
+      <summary>Meal history</summary>
+    </details>
+  </main>
+
+  <footer class="dim small">
+    Menu &amp; nutrition data from your school’s DineOnCampus feed, fetched directly by your browser.
+    Nutrition values are the cafeteria’s own estimates — treat them as a guide, not gospel.
+  </footer>
+
+  <script type="module" src="js/app.js?v=20260907-pwa1"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js'));
+    }
+  </script>
+</body>
+</html>
