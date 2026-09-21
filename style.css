@@ -302,3 +302,45 @@ footer { margin: 26px 4px; }
 .meal-extras { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .meal-extra:nth-child(3) { grid-column: 1 / -1; }
 @media (max-width: 520px) { .meal-extras { grid-template-columns: 1fr; } .meal-extra:nth-child(3) { grid-column: auto; } }
+
+
+/* Direct food swaps and per-meal dining-location overrides */
+.meal-location { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:.82rem; margin:2px 0 2px; }
+.meal-location-label { color:var(--dim); font-weight:700; }
+.meal-location-select { width:auto; min-width:190px; max-width:100%; padding:7px 9px; }
+.swap-panel { margin:2px 0 8px 44px; padding:9px; border:1px solid var(--line); border-radius:10px; background:var(--bg); display:grid; gap:6px; }
+.swap-panel-title { font-size:.78rem; font-weight:700; color:var(--dim); margin-bottom:2px; }
+.swap-option { display:flex; justify-content:space-between; align-items:center; gap:10px; text-align:left; width:100%; padding:8px 9px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); cursor:pointer; }
+.swap-option:hover { border-color:var(--blue); }
+.swap-option strong { font-size:.86rem; }
+.swap-option .item-meta { text-align:right; }
+.swap-empty { color:var(--dim); font-size:.8rem; }
+.remove-item { color:var(--bad); }
+@media (max-width:520px) {
+  .meal-location { align-items:stretch; flex-direction:column; }
+  .meal-location-select { width:100%; }
+  .swap-panel { margin-left:0; }
+  .swap-option { align-items:flex-start; flex-direction:column; }
+  .swap-option .item-meta { text-align:left; }
+}
+
+.swap-button { width:auto; min-width:50px; padding:0 7px; font-weight:700; }
+
+.app-version { position: fixed; top: 8px; left: 10px; z-index: 2000; max-width: calc(100vw - 20px); font-size: .68rem; line-height: 1.2; font-weight: 800; letter-spacing: .01em; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; box-shadow: 0 2px 7px rgba(0,0,0,.12); pointer-events: none; }
+
+/* Meal reset is a primary interaction, not a plain text action. */
+.meal-actions { display:flex; gap:8px; margin:6px 0; }
+.meal-reset-button {
+  border:1px solid var(--blue);
+  background:var(--card);
+  color:var(--blue);
+  border-radius:9px;
+  padding:7px 11px;
+  font-weight:800;
+  cursor:pointer;
+  box-shadow:0 1px 2px rgba(0,0,0,.08);
+  transition:transform .08s ease, background .12s ease, color .12s ease;
+}
+.meal-reset-button:hover { background:var(--blue); color:#fff; }
+.meal-reset-button:active { transform:scale(.97); }
+.meal-reset-button:disabled { opacity:.55; cursor:not-allowed; }

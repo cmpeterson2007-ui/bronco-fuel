@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bronco-fuel-v20260907-1';
+const CACHE_NAME = 'bronco-fuel-v20260921-8';
 const APP_SHELL = [
   '/',
   '/index.html',

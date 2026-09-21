@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="app-version" aria-label="Bronco Fuel build version">Weekend Source Fix v8 · 2026-09-21 · 10:00 MDT</div>
   <header class="app-head">
     <div class="head-top">
       <div><h1>🍽️ Bronco Fuel</h1><p class="tagline">Hit your macros with what the dining hall is actually serving.</p></div>
@@ -85,7 +86,7 @@
           <label class="check"><input type="checkbox" id="meal-dinner" /> Dinner</label>
           <input id="split-dinner" type="number" inputmode="numeric" min="5" max="80" />
         </div>
-        <p class="dim small">Weekend “Brunch” automatically covers breakfast + lunch.</p>
+        <p class="dim small">Breakfast, Lunch, and Dinner are planned separately every day. On weekends, Breakfast and Lunch may use the same published Brunch menu when that is what campus serves.</p>
       </fieldset>
 
       <details class="station-prefs" id="station-prefs">
@@ -149,7 +150,7 @@
     Nutrition values are the cafeteria’s own estimates — treat them as a guide, not gospel.
   </footer>
 
-  <script type="module" src="js/app.js?v=20260907-pwa1"></script>
+  <script type="module" src="js/app.js?v=20260921-v8"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js'));

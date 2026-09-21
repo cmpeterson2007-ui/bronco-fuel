@@ -36,6 +36,8 @@ const ALLERGENS = ["Milk", "Eggs", "Wheat", "Gluten", "Soy", "Peanuts", "Tree Nu
 let settings = loadSettings();
 let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
+let availableLocations = [];
+const BUILD_VERSION = 'Weekend Source Fix v8 · 2026-09-21 · 10:00 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 
@@ -216,6 +218,7 @@ async function refreshLocations() {
   locSel.replaceChildren(h("option", {}, "Loading…"));
   const locs = await getLocations(settings.schoolId);
   locs.sort((a, b) => a.name.localeCompare(b.name));
+  availableLocations = locs;
   locSel.replaceChildren(...locs.map((l) => h("option", { value: l.id }, l.name)));
   const loc =
     locs.find((l) => l.id === settings.locationId) ||
@@ -362,13 +365,16 @@ function produceOptions(stations, type) {
 
 const DRINK_OPTIONS = [
   { name: 'Water', portion: '12 fl oz', calories: 0, protein: 0, carbs: 0, fat: 0, recommended: true },
-  { name: '2% Milk', portion: '1 cup', calories: 122, protein: 8.1, carbs: 12, fat: 4.8, recommended: true },
+  { name: 'Skim milk', portion: '1 cup', calories: 83, protein: 8.3, carbs: 12.2, fat: 0.2 },
+  { name: 'Whole milk', portion: '1 cup', calories: 149, protein: 7.7, carbs: 11.7, fat: 8.0 },
+  { name: 'Chocolate milk', portion: '1 cup', calories: 190, protein: 8, carbs: 30, fat: 5 },
   { name: 'Orange juice', portion: '8 fl oz', calories: 112, protein: 1.7, carbs: 26, fat: 0.3 },
   { name: 'Apple juice', portion: '8 fl oz', calories: 114, protein: 0.2, carbs: 28, fat: 0.3 },
   { name: 'Coca-Cola', portion: '12 fl oz', calories: 140, protein: 0, carbs: 39, fat: 0 },
   { name: 'Pepsi', portion: '12 fl oz', calories: 150, protein: 0, carbs: 41, fat: 0 },
   { name: 'Diet Coke', portion: '12 fl oz', calories: 0, protein: 0, carbs: 0, fat: 0 },
   { name: 'Diet Pepsi', portion: '12 fl oz', calories: 0, protein: 0, carbs: 0, fat: 0 },
+  { name: 'Powerade', portion: '20 fl oz', calories: 130, protein: 0, carbs: 34, fat: 0 },
 ];
 
 function drinkOptions() {
@@ -387,26 +393,23 @@ function buildMealExtras(stations) {
   const vegetables = produceOptions(stations, 'vegetable');
   const drinks = drinkOptions();
   return {
-    fruit: fruits[0] ? cloneExtra(fruits[0]) : null,
-    vegetable: vegetables[0] ? cloneExtra(vegetables[0]) : null,
+    fruits: [],
+    vegetables: [],
     drinks: [],
     options: { fruit: fruits, vegetable: vegetables, drink: drinks },
   };
 }
 
 function extrasTotals(extras) {
-  const types = ['fruit', 'vegetable'];
-  return types.reduce((t, type) => {
-    const item = extras?.[type];
-    if (item) {
-      t.calories += item.calories || 0; t.protein += item.protein || 0;
-      t.carbs += item.carbs || 0; t.fat += item.fat || 0;
-    }
-    return t;
-  }, (extras?.drinks || []).reduce((t, item) => {
+  const all = [
+    ...(extras?.fruits || []),
+    ...(extras?.vegetables || []),
+    ...(extras?.drinks || []),
+  ];
+  return all.reduce((t, item) => {
     t.calories += item.calories || 0; t.protein += item.protein || 0;
     t.carbs += item.carbs || 0; t.fat += item.fat || 0; return t;
-  }, { calories: 0, protein: 0, carbs: 0, fat: 0 }));
+  }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
 }
 
 function combinedTotals(mainTotals, extras) {
@@ -433,16 +436,30 @@ function recomputeMeal(day, meal) {
 function renderExtraSelector(day, meal, type, label, icon) {
   const options = meal.result.extras.options?.[type] || [];
   if (type === 'drink') return renderDrinkAdder(day, meal, label, icon, options);
-  if (!options.length) return h('div', { class: 'meal-extra extra-empty' }, h('div', { class: 'extra-label' }, `${icon} ${label}`), h('div', { class: 'dim small' }, `No ${label.toLowerCase()} options found on the DineOnCampus menu.`));
-  const selectedName = meal.result.extras[type]?.name;
-  const selected = options.find((x) => x.name === selectedName) || options[0];
-  meal.result.extras[type] = cloneExtra(selected);
-  const select = h('select', { class: 'extra-select', 'aria-label': `${label} for ${meal.periodName}` }, ...options.map((item) => h('option', { value: item.name }, `${item.name} — ${item.station}${item.recommended ? ' — ⭐ Best choice' : ''}`)));
-  select.value = selected.name;
+  return renderProduceAdder(day, meal, type, label, icon, options);
+}
+
+function renderProduceAdder(day, meal, type, label, icon, options) {
   const locked = isPastDate(day.date);
-  select.disabled = locked;
-  select.addEventListener('change', () => { meal.result.extras[type] = cloneExtra(options.find((x) => x.name === select.value) || options[0]); recomputeMeal(day, meal); renderWeek(); saveSavedPlan(); });
-  return h('div', { class: `meal-extra ${locked ? 'extra-locked' : ''}` }, h('div', { class: 'extra-label' }, `${icon} ${label}`), select, h('div', { class: 'item-meta' }, [selected.station ? `📍 ${selected.station}` : '', selected.portion, `${Math.round(selected.calories)} cal`, `${Math.round(selected.protein)}g protein`].filter(Boolean).join(' · ')));
+  const key = type === 'fruit' ? 'fruits' : 'vegetables';
+  const selected = meal.result.extras[key] || (meal.result.extras[key] = []);
+  const select = h('select', { class: 'extra-select', disabled: locked },
+    h('option', { value: '' }, `Choose ${label.toLowerCase()} to add…`),
+    ...options.map(x => h('option', { value: x.name }, `${x.name} — ${x.station}${x.recommended ? ' — ⭐ Best choice' : ''}`))
+  );
+  const add = h('button', { type:'button', class:'add-drink', disabled: locked || !options.length, onclick: () => {
+    const item = options.find(x => x.name === select.value); if (!item) return;
+    selected.push(cloneExtra(item)); select.value=''; recomputeMeal(day, meal); renderWeek(); saveSavedPlan();
+  }}, '+ Add');
+  const rows = selected.length ? selected.map((item, i) => h('div',{class:'drink-row'},
+    h('span',{},`${item.name} · ${Math.round(item.calories)} cal${item.protein?` · ${Math.round(item.protein)}g protein`:''}`),
+    !locked ? h('button',{type:'button',class:'drink-remove',title:`Remove ${label.toLowerCase()}`,onclick:()=>{ selected.splice(i,1); recomputeMeal(day,meal); renderWeek(); saveSavedPlan(); }},'✕') : null
+  )) : [h('div',{class:'dim small'}, options.length ? `No ${label.toLowerCase()} added yet.` : `No ${label.toLowerCase()} options found on the DineOnCampus menu.`)];
+  return h('div',{class:'meal-extra drink-extra'},
+    h('div',{class:'extra-label'},`${icon} ${label}`),
+    h('div',{class:'drink-add-row'},select,add),
+    h('div',{class:'drink-list'},...rows)
+  );
 }
 
 function renderDrinkAdder(day, meal, label, icon, options) {
@@ -532,24 +549,146 @@ function splitFractions() {
   return { breakfast: f("breakfast"), lunch: f("lunch"), dinner: f("dinner") };
 }
 
-function selectThreeMealPeriods(periods) {
-  const wanted = new Set(["breakfast", "lunch", "dinner"].filter((m) => settings.meals[m]));
-  const matching = periods
-    .map((p) => ({ period: p, canonical: canonicalMeal(p) }))
-    .filter((m) => wanted.has(m.canonical));
+function isWeekendDate(dateStr) {
+  // Parse at noon so the result is stable regardless of timezone/DST.
+  const d = new Date(`${dateStr}T12:00:00`);
+  const day = d.getDay();
+  return day === 0 || day === 6;
+}
 
-  // DineOnCampus can publish multiple variants (for example Lunch and Late Lunch).
-  // Keep exactly one period for each of the three meal slots. Prefer the ordinary
-  // period name, but use a variant when it is the only option available.
-  const byCanonical = new Map();
-  const isVariant = (p) => /late|early|second|extended/i.test(`${p.name || ''} ${p.slug || ''}`);
-  for (const candidate of matching) {
-    const existing = byCanonical.get(candidate.canonical);
-    if (!existing || (isVariant(existing.period) && !isVariant(candidate.period))) {
-      byCanonical.set(candidate.canonical, candidate);
-    }
+function periodText(period) {
+  return `${period?.name || ''} ${period?.slug || ''}`.trim().toLowerCase();
+}
+
+function isNonMealVariant(period) {
+  return /late|early|second|extended/i.test(periodText(period));
+}
+
+function chooseOrdinaryPeriod(periods, matcher) {
+  const matches = (periods || []).filter(matcher);
+  return matches.find((p) => !isNonMealVariant(p)) || matches[0] || null;
+}
+
+function selectThreeMealPeriods(periods, dateStr = activeDate) {
+  const list = Array.isArray(periods) ? periods : [];
+  const weekend = isWeekendDate(dateStr);
+
+  /*
+   * IMPORTANT: Do not derive weekend meal cards from the canonical meal
+   * buckets alone. DineOnCampus has historically returned Buster's weekend
+   * periods as Brunch + Dinner. The older working build explicitly selected
+   * the Brunch period first; later versions accidentally made Breakfast/Lunch
+   * depend on canonical classification and could therefore drop both cards.
+   *
+   * The planner now has three distinct weekend meals, but Breakfast and Lunch
+   * are allowed to share the exact same published Brunch period. That keeps
+   * the source period ID intact while giving the user three independent meal
+   * cards/budgets/history entries.
+   */
+  if (weekend) {
+    const brunch = chooseOrdinaryPeriod(list, (p) => /brunch/i.test(periodText(p)));
+    const breakfast = chooseOrdinaryPeriod(list, (p) => /breakfast/i.test(periodText(p)));
+    const lunch = chooseOrdinaryPeriod(list, (p) => /\blunch\b/i.test(periodText(p)) && !/late|second|extended/i.test(periodText(p)));
+    const dinner = chooseOrdinaryPeriod(list, (p) => /dinner/i.test(periodText(p)));
+
+    // Source-menu priority for the first two weekend meals:
+    // 1) explicit Breakfast/Lunch if published
+    // 2) the published Brunch menu
+    // 3) the other ordinary daytime menu as a last-resort fallback
+    const breakfastSource = breakfast || brunch || lunch;
+    const lunchSource = lunch || brunch || breakfast;
+
+    return [
+      breakfastSource ? { period: breakfastSource, canonical: 'breakfast', displayCanonical: 'breakfast', periodName: 'Breakfast' } : null,
+      lunchSource ? { period: lunchSource, canonical: 'lunch', displayCanonical: 'lunch', periodName: 'Lunch' } : null,
+      dinner ? { period: dinner, canonical: 'dinner', displayCanonical: 'dinner', periodName: 'Dinner' } : null,
+    ].filter(Boolean);
   }
-  return ["breakfast", "lunch", "dinner"].map((k) => byCanonical.get(k)).filter(Boolean);
+
+  // Weekdays retain the normal Breakfast/Lunch/Dinner behavior.
+  return [
+    chooseOrdinaryPeriod(list, (p) => /breakfast/i.test(periodText(p))),
+    chooseOrdinaryPeriod(list, (p) => /\blunch\b/i.test(periodText(p)) && !/late|second|extended/i.test(periodText(p))),
+    chooseOrdinaryPeriod(list, (p) => /dinner/i.test(periodText(p))),
+  ].filter(Boolean).map((period) => ({ period, canonical: canonicalMeal(period) }));
+}
+
+function selectPeriodForMeal(periods, canonical, dateStr = activeDate) {
+  const list = periods || [];
+  const matches = list.filter((p) => canonicalMeal(p) === canonical);
+  const isVariant = (p) => /late|early|second|extended/i.test(`${p.name || ''} ${p.slug || ''}`);
+  const exact = matches.find((p) => !isVariant(p)) || matches[0];
+  if (exact) return exact;
+
+  // Weekend dining halls may publish one Brunch period instead of separate
+  // Breakfast/Lunch periods. Breakfast and Lunch are still distinct planner
+  // meals, but both may legitimately draw from that same published menu.
+  if (canonical === 'breakfast' || canonical === 'lunch') {
+    // Weekend dining halls commonly publish Brunch instead of separate
+    // Breakfast/Lunch periods. Treat that published period as valid for both
+    // planner cards, regardless of the synthetic card name.
+    const brunch = list.find((p) => /brunch/i.test(`${p.name || ''} ${p.slug || ''}`));
+    if (brunch) return brunch;
+  }
+
+  // Campus retail/restaurant locations commonly publish one "All Day" period
+  // instead of separate Breakfast/Lunch/Dinner periods. Treat that period as
+  // valid for whichever meal the user assigned this location to.
+  const allDay = list.find((p) => /all[ -]?day/i.test(`${p.name || ''} ${p.slug || ''}`));
+  if (allDay) return allDay;
+
+  // Some campus retail locations have historically returned a single period
+  // with a nonstandard name. If there is exactly one period and it did not map
+  // to a meal-specific period, it is still the location's only published menu
+  // and should be usable for the selected meal.
+  if (list.length === 1) return list[0];
+  return null;
+}
+
+function budgetAfterExtras(budget, extras) {
+  const extraT = extrasTotals(extras);
+  return {
+    calories: Math.max(200, budget.calories - extraT.calories),
+    protein: Math.max(10, budget.protein - extraT.protein),
+    fatMax: budget.fatMax == null ? null : Math.max(5, budget.fatMax - extraT.fat),
+    carbMax: budget.carbMax == null ? null : Math.max(10, budget.carbMax - extraT.carbs),
+  };
+}
+
+function locationNameFor(id) {
+  return availableLocations.find((x) => String(x.id) === String(id))?.name || settings.locationName || 'Dining location';
+}
+
+async function buildMealAtLocation(dateStr, canonical, budget, locationId, usage = new Map(), options = {}) {
+  // Use an already-selected published period when one is available. This is
+  // critical on weekends: Breakfast and Lunch can be two planner cards that
+  // intentionally share the same published Brunch period. Re-querying by the
+  // synthetic card name can otherwise reject a perfectly valid menu.
+  let period = options.period || null;
+  if (!period) {
+    const periods = await getPeriods(locationId, dateStr);
+    period = selectPeriodForMeal(periods, canonical, dateStr);
+  }
+  if (!period) throw new Error(`No ${canonical} menu is published at ${locationNameFor(locationId)} for this date.`);
+  const stations = await getMenu(locationId, dateStr, period.id);
+  const extras = buildMealExtras(stations);
+  const mainBudget = budgetAfterExtras(budget, extras);
+  const pool = buildCandidatePool(stations, { ...prefs(), mealCanonical: canonical });
+  const result = optimizeMeal(pool, mainBudget, usage, options);
+  result.mainTotals = result.totals;
+  result.extras = extras;
+  result.totals = combinedTotals(result.totals, extras);
+  return {
+    periodName: canonical[0].toUpperCase() + canonical.slice(1),
+    sourcePeriodName: period.name,
+    periodId: period.id,
+    canonical,
+    budget,
+    locationId,
+    locationName: locationNameFor(locationId),
+    stations,
+    result,
+  };
 }
 
 async function buildWeek() {
@@ -582,7 +721,7 @@ async function buildWeek() {
         continue;
       }
 
-      const dayMeals = selectThreeMealPeriods(periods);
+      const dayMeals = selectThreeMealPeriods(periods, dateStr);
 
       if (!dayMeals.length) {
         weekPlan.push({ date: dateStr, label: dayLabel(d), meals: [], note: "No matching meal periods this day." });
@@ -601,25 +740,13 @@ async function buildWeek() {
         try {
           stations = await getMenu(settings.locationId, dateStr, period.id);
         } catch { /* leave empty; rendered as unavailable */ }
-        const extras = buildMealExtras(stations);
-        const extraT = extrasTotals(extras);
         const budget = budgets[canonical];
-        const mainBudget = {
-          calories: Math.max(200, budget.calories - extraT.calories),
-          protein: Math.max(10, budget.protein - extraT.protein),
-          fatMax: budget.fatMax == null ? null : Math.max(5, budget.fatMax - extraT.fat),
-          carbMax: budget.carbMax == null ? null : Math.max(10, budget.carbMax - extraT.carbs),
-        };
-        const pool = buildCandidatePool(stations, { ...prefs(), mealCanonical: canonicalMeal({ name: period.name, slug: period.slug }) });
-        const result = optimizeMeal(pool, mainBudget, usage);
-        result.mainTotals = result.totals;
-        result.extras = extras;
-        result.totals = combinedTotals(result.totals, extras);
-        for (const pick of result.picks) {
+        const meal = await buildMealAtLocation(dateStr, canonical, budget, settings.locationId, usage, { period });
+        for (const pick of meal.result.picks) {
           const k = itemKey(pick.item.station, pick.item.name);
           usage.set(k, (usage.get(k) || 0) + 1);
         }
-        meals.push({ periodName: period.name, periodId: period.id, canonical, budget, stations, result });
+        meals.push(meal);
         await new Promise((r) => setTimeout(r, 150)); // be polite to the API
       }
       weekPlan.push({
@@ -666,7 +793,7 @@ function macroBar(totals, budget) {
 
 function mealHistory() { try { return JSON.parse(localStorage.getItem("bf.mealHistory") || "[]"); } catch { return []; } }
 function saveMealHistory(records) { localStorage.setItem("bf.mealHistory", JSON.stringify(records.slice(-500))); }
-function mealRecordKey(day, meal) { return `${day.date}::${meal.periodId}`; }
+function mealRecordKey(day, meal) { return `${day.date}::${meal.canonical}::${meal.periodId}`; }
 function isMealEaten(day, meal) { return mealHistory().some((r) => r.key === mealRecordKey(day, meal)); }
 function snapshotMeal(day, meal) {
   return {
@@ -674,7 +801,11 @@ function snapshotMeal(day, meal) {
     calories: Math.round(meal.result.totals.calories), protein: Math.round(meal.result.totals.protein),
     carbs: Math.round(meal.result.totals.carbs), fat: Math.round(meal.result.totals.fat),
     items: meal.result.picks.map((p) => ({ name: p.item.name, servings: p.servings, portion: p.item.portion, calories: Math.round(p.item.calories * p.servings), protein: Math.round(p.item.protein * p.servings), station: p.item.station })),
-    extras: [...['fruit','vegetable'].map((t) => meal.result.extras?.[t]).filter(Boolean).map((x) => ({ type: classifyProduce(x) || 'extra', name: x.name, portion: x.portion, calories: Math.round(x.calories), protein: Math.round(x.protein) })), ...(meal.result.extras?.drinks || []).map((x) => ({ type: 'drink', name: x.name, portion: x.portion, calories: Math.round(x.calories), protein: Math.round(x.protein) }))]
+    extras: [
+      ...(meal.result.extras?.fruits || []).map((x) => ({ type: 'fruit', name: x.name, portion: x.portion, calories: Math.round(x.calories), protein: Math.round(x.protein) })),
+      ...(meal.result.extras?.vegetables || []).map((x) => ({ type: 'vegetable', name: x.name, portion: x.portion, calories: Math.round(x.calories), protein: Math.round(x.protein) })),
+      ...(meal.result.extras?.drinks || []).map((x) => ({ type: 'drink', name: x.name, portion: x.portion, calories: Math.round(x.calories), protein: Math.round(x.protein) }))
+    ]
   };
 }
 function toggleMealEaten(day, meal, checked) {
@@ -711,7 +842,7 @@ async function buildSingleDay(dateStr) {
   setStatus(`Planning ${dayLabel(d)}…`);
   try {
     const periods = await getPeriods(settings.locationId, dateStr);
-    const dayMeals = selectThreeMealPeriods(periods);
+    const dayMeals = selectThreeMealPeriods(periods, dateStr);
     if (!dayMeals.length) {
       weekPlan = weekPlan.filter((x) => x.date !== dateStr);
       weekPlan.push({ date:dateStr, label:dayLabel(d), meals:[], note:"No matching meal periods this day." });
@@ -720,12 +851,9 @@ async function buildSingleDay(dateStr) {
     const { budgets, coverage } = allocateBudgets(dailyTargets(dateStr), dayMeals.map((m) => ({canonical:m.canonical})), splitFractions());
     const meals = [];
     for (const {period, canonical} of dayMeals) {
-      let stations=[]; try { stations=await getMenu(settings.locationId,dateStr,period.id); } catch {}
-      const extras=buildMealExtras(stations), extraT=extrasTotals(extras), budget=budgets[canonical];
-      const mainBudget={ calories:Math.max(200,budget.calories-extraT.calories), protein:Math.max(10,budget.protein-extraT.protein), fatMax:budget.fatMax==null?null:Math.max(5,budget.fatMax-extraT.fat), carbMax:budget.carbMax==null?null:Math.max(10,budget.carbMax-extraT.carbs) };
-      const result=optimizeMeal(buildCandidatePool(stations,{ ...prefs(), mealCanonical: canonical }),mainBudget,new Map());
-      result.mainTotals=result.totals; result.extras=extras; result.totals=combinedTotals(result.totals,extras);
-      meals.push({periodName:period.name,periodId:period.id,canonical,budget,stations,result});
+      const budget = budgets[canonical];
+      const meal = await buildMealAtLocation(dateStr, canonical, budget, settings.locationId, new Map(), { period });
+      meals.push(meal);
       await new Promise(r=>setTimeout(r,100));
     }
     weekPlan=weekPlan.filter((x)=>x.date!==dateStr);
@@ -746,6 +874,206 @@ function renderDayNavigator() {
   );
 }
 
+function currentMainPool(meal) {
+  return buildCandidatePool(meal.stations || [], { ...prefs(), mealCanonical: meal.canonical });
+}
+
+function swapOptionsForPick(meal, pick) {
+  const pool = currentMainPool(meal);
+  const currentKey = itemKey(pick.item.station, pick.item.name);
+  const fixedTotals = { ...meal.result.totals };
+  fixedTotals.calories -= pick.item.calories * pick.servings;
+  fixedTotals.protein -= pick.item.protein * pick.servings;
+  fixedTotals.carbs -= pick.item.carbs * pick.servings;
+  fixedTotals.fat -= pick.item.fat * pick.servings;
+
+  const options = pool
+    .filter((item) => itemKey(item.station, item.name) !== currentKey)
+    .map((item) => {
+      const totals = {
+        calories: fixedTotals.calories + item.calories * pick.servings,
+        protein: fixedTotals.protein + item.protein * pick.servings,
+        carbs: fixedTotals.carbs + item.carbs * pick.servings,
+        fat: fixedTotals.fat + item.fat * pick.servings,
+      };
+      const proteinShort = Math.max(0, meal.budget.protein - totals.protein);
+      const calorieOver = Math.max(0, totals.calories - meal.budget.calories);
+      const calorieUnder = Math.max(0, meal.budget.calories - totals.calories);
+      const fatOver = meal.budget.fatMax == null ? 0 : Math.max(0, totals.fat - meal.budget.fatMax);
+      const carbOver = meal.budget.carbMax == null ? 0 : Math.max(0, totals.carbs - meal.budget.carbMax);
+      return { item, servings: pick.servings, totals, feasible: proteinShort <= 0 && calorieOver <= 0 && fatOver <= 0 && carbOver <= 0,
+        score: proteinShort * 10000 + calorieOver * 100 + calorieUnder + fatOver * 20 + carbOver * 8 };
+    })
+    .filter((x) => x.feasible)
+    .sort((a, b) => a.score - b.score || b.item.protein - a.item.protein || a.item.name.localeCompare(b.item.name));
+  return options.slice(0, 5);
+}
+
+function applyItemSwap(meal, oldPick, replacement) {
+  const idx = meal.result.picks.indexOf(oldPick);
+  if (idx < 0) return;
+  meal.result.picks[idx] = { item: replacement.item, servings: replacement.servings };
+  meal.result.mainTotals = meal.result.picks.reduce((t, p) => {
+    t.calories += p.item.calories * p.servings; t.protein += p.item.protein * p.servings;
+    t.carbs += p.item.carbs * p.servings; t.fat += p.item.fat * p.servings; return t;
+  }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+  meal.result.totals = combinedTotals(meal.result.mainTotals, meal.result.extras);
+  delete meal.result.flameOmelet;
+  delete meal.result.laMesaPlate;
+}
+
+function renderSwapChooser(day, meal, pick) {
+  const options = swapOptionsForPick(meal, pick);
+  if (!options.length) {
+    return h('div', { class: 'swap-panel swap-empty' }, 'No direct swaps found that keep this meal within your current calorie/protein limits.');
+  }
+  return h('div', { class: 'swap-panel' },
+    h('div', { class: 'swap-panel-title' }, `Swap ${pick.item.name} — choose one of ${options.length} options`),
+    ...options.map((option) => h('button', {
+      type: 'button', class: 'swap-option', onclick: () => {
+        if (isPastDate(day.date)) return;
+        applyItemSwap(meal, pick, option);
+        renderWeek();
+        saveSavedPlan();
+      }
+    }, h('strong', {}, option.item.name), h('span', { class: 'item-meta' }, `${option.item.station} · ${option.servings}× · ${Math.round(option.totals.calories)} cal total · ${Math.round(option.totals.protein)}g protein total`)))
+  );
+}
+
+function isMealEatenOnDay(day, meal) {
+  return isMealEaten(day, meal);
+}
+
+function budgetPlanForExistingDay(day) {
+  const meals = day.meals || [];
+  const targets = dailyTargets(day.date);
+  const eaten = meals.filter((m) => isMealEatenOnDay(day, m));
+  const remaining = meals.filter((m) => !isMealEatenOnDay(day, m));
+
+  if (!remaining.length) return new Map(meals.map((m) => [m.canonical, m.budget]));
+
+  const consumed = eaten.reduce((t, m) => {
+    t.calories += Number(m.result?.totals?.calories) || 0;
+    t.protein += Number(m.result?.totals?.protein) || 0;
+    t.carbs += Number(m.result?.totals?.carbs) || 0;
+    t.fat += Number(m.result?.totals?.fat) || 0;
+    return t;
+  }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+  const remainTarget = {
+    calories: Math.max(0, targets.calories - consumed.calories),
+    protein: Math.max(0, targets.protein - consumed.protein),
+    carbs: targets.carbMax == null ? null : Math.max(0, targets.carbMax - consumed.carbs),
+    fat: targets.fatMax == null ? null : Math.max(0, targets.fatMax - consumed.fat),
+  };
+
+  const weights = new Map();
+  let totalWeight = 0;
+  for (const m of remaining) {
+    const w = m.canonical === 'brunch'
+      ? (settings.splits.breakfast + settings.splits.lunch)
+      : (settings.splits[m.canonical] || 0);
+    const weight = Math.max(0.01, Number(w) || 0);
+    weights.set(m, weight);
+    totalWeight += weight;
+  }
+
+  const out = new Map();
+  for (const m of eaten) out.set(m.canonical, m.budget);
+  for (const m of remaining) {
+    const frac = (weights.get(m) || 0) / (totalWeight || 1);
+    out.set(m.canonical, {
+      calories: Math.round(remainTarget.calories * frac),
+      protein: Math.round(remainTarget.protein * frac),
+      fatMax: remainTarget.fat == null ? null : Math.round(remainTarget.fat * frac),
+      carbMax: remainTarget.carbs == null ? null : Math.round(remainTarget.carbs * frac),
+    });
+  }
+  return out;
+}
+
+function mealBudgetForCurrentDay(day, meal) {
+  const budgets = budgetPlanForExistingDay(day);
+  return budgets.get(meal.canonical) || meal.budget;
+}
+
+async function resetMeal(day, meal, locationId = meal.locationId || settings.locationId, previousLocation = null) {
+  if (isPastDate(day.date)) return;
+  const previousMeal = { ...meal };
+  const targetBudget = mealBudgetForCurrentDay(day, meal);
+  const targetLocationName = locationNameFor(locationId);
+  setStatus(`Resetting ${meal.periodName.toLowerCase()} at ${targetLocationName}…`);
+  try {
+    const rebuilt = await buildMealAtLocation(
+      day.date,
+      meal.canonical,
+      targetBudget,
+      locationId,
+      new Map(),
+      {
+        randomize: true,
+        resetNonce: Date.now() + Math.random(),
+        resetStrict: true,
+        period: (!previousLocation || String(locationId) === String(previousLocation.locationId)) && meal.periodId
+          ? { id: meal.periodId, name: meal.sourcePeriodName || meal.periodName, slug: String(meal.sourcePeriodName || meal.periodName || '').toLowerCase() }
+          : null,
+        avoidKeys: (meal.result?.picks || []).map((p) => itemKey(p.item.station, p.item.name)),
+      }
+    );
+    Object.assign(meal, rebuilt);
+    renderWeek();
+    saveSavedPlan();
+    setStatus(`${meal.periodName} reset. Other meals were not changed.`, 'info');
+    setTimeout(() => setStatus(''), 3000);
+  } catch (err) {
+    // Restore the complete previous meal if the requested location really has
+    // no usable menu. The selector therefore never gets stuck displaying a
+    // location that failed to load.
+    Object.assign(meal, previousMeal);
+    if (previousLocation && previousLocation.locationId != null) {
+      meal.locationId = previousLocation.locationId;
+      meal.locationName = previousLocation.locationName;
+    }
+    renderWeek();
+    setStatus(`Couldn't reset this meal: ${err.message}`, 'error');
+  }
+}
+
+function renderMealLocationSelector(day, meal) {
+  const locked = isPastDate(day.date);
+  const selected = meal.locationId || settings.locationId;
+  const choices = [...availableLocations].sort((a, b) => {
+    const special = (name) => /panda express|la tapatia/i.test(name) ? 0 : /buster/i.test(name) ? 1 : 2;
+    return special(a.name) - special(b.name) || a.name.localeCompare(b.name);
+  });
+  const locationChoices = choices.length ? choices : [{ id: selected, name: meal.locationName || settings.locationName || 'Current dining location' }];
+  const select = h('select', { class: 'meal-location-select', disabled: locked, 'aria-label': `Eating location for ${meal.periodName}` },
+    ...locationChoices.map((loc) => h('option', { value: loc.id }, loc.name))
+  );
+  select.value = String(selected);
+  if (select.value !== String(selected)) {
+    const current = locationChoices.find((loc) => String(loc.id) === String(selected));
+    if (current) {
+      select.append(h('option', { value: current.id }, current.name));
+      select.value = String(selected);
+    }
+  }
+  select.addEventListener('change', () => changeMealLocation(day, meal, select.value));
+  return h('div', { class: 'meal-location' },
+    h('span', { class: 'meal-location-label' }, 'Eating at'), select,
+    locked ? null : h('span', { class: 'dim small' }, 'Changes only this meal')
+  );
+}
+
+async function changeMealLocation(day, meal, locationId) {
+  if (isPastDate(day.date) || String(locationId) === String(meal.locationId || settings.locationId)) return;
+  const previous = { locationId: meal.locationId, locationName: meal.locationName };
+  meal.locationId = String(locationId);
+  meal.locationName = locationNameFor(locationId);
+  renderWeek();
+  await resetMeal(day, meal, locationId, previous);
+}
+
 function renderMeal(day, meal) {
   const past = isPastDate(day.date);
   const future = isFutureDate(day.date);
@@ -756,11 +1084,22 @@ function renderMeal(day, meal) {
   }
   const stationEls = [...byStation.entries()].map(([station, picks]) => h('div', { class: 'station' },
     h('div', { class: 'station-name' }, `📍 ${station}`),
-    ...picks.map((pick) => h('div', { class: 'item' },
-      h('span', { class: 'servings' }, `${pick.servings}×`),
-      h('div', { class: 'item-body' }, h('div', { class: 'item-name' }, pick.item.name), h('div', { class: 'item-meta' }, [pick.item.portion, `${Math.round(pick.item.calories)} cal`, `${Math.round(pick.item.protein)}g protein`].filter(Boolean).join(' · '))),
-      h('button', { class: 'swap', title: "Don't suggest this item — pick something else", disabled: past, onclick: () => { if (past) return; excluded.add(itemKey(pick.item.station, pick.item.name)); saveExcluded(); reoptimizeMeal(day, meal); } }, '✕')
-    ))
+    ...picks.map((pick) => {
+      const swapOptions = swapOptionsForPick(meal, pick);
+      return h('div', { class: 'item' },
+        h('span', { class: 'servings' }, `${pick.servings}×`),
+        h('div', { class: 'item-body' }, h('div', { class: 'item-name' }, pick.item.name), h('div', { class: 'item-meta' }, [pick.item.portion, `${Math.round(pick.item.calories)} cal`, `${Math.round(pick.item.protein)}g protein`].filter(Boolean).join(' · '))),
+        !past ? h('button', { class: 'swap swap-button', title: 'Choose a direct replacement for this item', disabled: !swapOptions.length, onclick: (e) => {
+          const row = e.currentTarget.closest('.item');
+          const next = row?.nextElementSibling;
+          if (next?.classList.contains('swap-panel')) { next.remove(); return; }
+          row?.after(renderSwapChooser(day, meal, pick));
+        } }, 'Swap') : null,
+        !past ? h('button', { class: 'swap remove-item', title: 'Remove this item and recalculate the meal', onclick: () => {
+          excluded.add(itemKey(pick.item.station, pick.item.name)); saveExcluded(); reoptimizeMeal(day, meal);
+        } }, '✕') : null
+      );
+    })
   ));
   const extraCards = [['fruit','Fruit','🍎'],['vegetable','Vegetable','🥦'],['drink','Drink','🥛']].map(([type,label,icon]) => renderExtraSelector(day, meal, type, label, icon));
   const eaten = isMealEaten(day, meal);
@@ -768,6 +1107,10 @@ function renderMeal(day, meal) {
   return h('div', { class: `meal ${eaten ? 'meal-eaten' : ''} ${past ? 'past-meal' : ''} ${future ? 'future-meal' : ''}`, 'data-meal': `${day.date}-${meal.periodId}` },
     h('div', { class: 'meal-head' },
       h('div', { class: 'meal-title-row' }, h('span', { class: 'meal-name' }, meal.periodName), eaten ? h('span', { class: 'meal-complete-badge' }, '✓ COMPLETED') : null),
+      renderMealLocationSelector(day, meal),
+      !past ? h('div', { class: 'meal-actions' },
+        h('button', { type:'button', class:'meal-reset-button', onclick:() => resetMeal(day, meal) }, '↻ Meal reset')
+      ) : null,
       h('label', { class: `eaten-check ${eaten ? 'checked' : ''}` },
         h('input', { type: 'checkbox', checked: eaten, disabled: past || future, onchange: (e) => toggleMealEaten(day, meal, e.target.checked), 'aria-label': `Mark ${meal.periodName} as eaten` }),
         h('span', { class: 'eaten-box' }, eaten ? '✓' : ''),
@@ -857,7 +1200,7 @@ function clearMealHistoryForDates(dates) {
 }
 function exerciseWarning(action, dates) {
   const dayText = dates.length === 1 ? dates[0] : dates.join(', ');
-  return confirm(`Changing this exercise will recalculate the meal plan for ${dayText}. All meals recorded as “eaten as prescribed” for ${dayText} will be reset to incomplete, because the calorie and nutrient targets may change.\n\nDo you want to continue?`);
+  return confirm(`Changing this exercise will recalculate only meals you have not eaten yet for ${dayText}. Meals already recorded as “eaten as prescribed” will stay unchanged.\n\nDo you want to continue?`);
 }
 
 async function rebuildPlanDay(dateStr) {
@@ -865,48 +1208,52 @@ async function rebuildPlanDay(dateStr) {
   if (idx < 0) return;
   const oldDay = weekPlan[idx];
   const d = new Date(`${dateStr}T12:00:00`);
-  const splits = splitFractions();
   let periods = [];
   try { periods = await getPeriods(settings.locationId, dateStr); } catch { periods = []; }
-  const dayMeals = selectThreeMealPeriods(periods);
-  if (!dayMeals.length) {
-    weekPlan[idx] = { date: dateStr, label: oldDay.label || dayLabel(d), meals: [], note: "No matching meal periods this day." };
-    renderWeek(); saveSavedPlan(); return;
-  }
-  const { budgets, coverage } = allocateBudgets(dailyTargets(dateStr), dayMeals.map((m) => ({ canonical: m.canonical })), splits);
+  const dayMeals = selectThreeMealPeriods(periods, dateStr);
+  if (!dayMeals.length) return;
+
+  const oldByCanonical = new Map((oldDay.meals || []).map((m) => [m.canonical, m]));
+  const descriptors = dayMeals.map(({ canonical }) => ({ canonical }));
+  const tempDay = { ...oldDay, meals: dayMeals.map(({ canonical }) => oldByCanonical.get(canonical) || { canonical, result: { totals: {} }, budget: {} }) };
+  const budgets = budgetPlanForExistingDay(tempDay);
+
   const meals = [];
   const usage = new Map();
-  for (const { period, canonical } of dayMeals) {
-    let stations = [];
-    try { stations = await getMenu(settings.locationId, dateStr, period.id); } catch {}
-    const extras = buildMealExtras(stations);
-    const extraT = extrasTotals(extras);
-    const budget = budgets[canonical];
-    const mainBudget = {
-      calories: Math.max(200, budget.calories - extraT.calories),
-      protein: Math.max(10, budget.protein - extraT.protein),
-      fatMax: budget.fatMax == null ? null : Math.max(5, budget.fatMax - extraT.fat),
-      carbMax: budget.carbMax == null ? null : Math.max(10, budget.carbMax - extraT.carbs),
-    };
-    const pool = buildCandidatePool(stations, { ...prefs(), mealCanonical: canonicalMeal({ name: period.name, slug: period.slug }) });
-    const result = optimizeMeal(pool, mainBudget, usage);
-    result.mainTotals = result.totals;
-    result.extras = extras;
-    result.totals = combinedTotals(result.totals, extras);
-    for (const pick of result.picks) { const k = itemKey(pick.item.station, pick.item.name); usage.set(k, (usage.get(k) || 0) + 1); }
-    meals.push({ periodName: period.name, periodId: period.id, canonical, budget, stations, result });
+  for (const { canonical } of dayMeals) {
+    const oldMeal = oldByCanonical.get(canonical);
+    if (oldMeal && isMealEatenOnDay(oldDay, oldMeal)) {
+      // Never rewrite food that the user has already eaten. Exercise changes
+      // belong entirely to the meals that remain.
+      meals.push(oldMeal);
+      continue;
+    }
+
+    const budget = budgets.get(canonical) || oldMeal?.budget;
+    const mealLocationId = oldMeal?.locationId || settings.locationId;
+    const meal = await buildMealAtLocation(dateStr, canonical, budget, mealLocationId, usage, { randomize: true });
+    for (const pick of meal.result.picks) {
+      const k = itemKey(pick.item.station, pick.item.name);
+      usage.set(k, (usage.get(k) || 0) + 1);
+    }
+    meals.push(meal);
   }
-  weekPlan[idx] = { date: dateStr, label: oldDay.label || dayLabel(d), meals, note: coverage < 0.85 ? "Only some meals are published for this day, so the plan covers less than your full daily target." : null };
+
+  weekPlan[idx] = {
+    date: dateStr,
+    label: oldDay.label || dayLabel(d),
+    meals,
+    note: oldDay.note || null,
+  };
   renderWeek(); saveSavedPlan();
 }
 
 async function applyExerciseChange(affectedDates) {
-  clearMealHistoryForDates(affectedDates);
-  setStatus('Recalculating the affected meal plan…');
+  setStatus('Recalculating the remaining meal plan…');
   try {
     for (const date of [...new Set(affectedDates)]) await rebuildPlanDay(date);
     renderHistory();
-    setStatus('Meal plan recalculated. Previously completed meals for the affected day were reset.', 'info');
+    setStatus('Meal plan recalculated. Meals you already ate were left unchanged.', 'info');
   } catch (err) {
     setStatus(`Exercise changed, but the meal plan could not be fully recalculated: ${err.message}`, 'error');
   }
@@ -1043,8 +1390,14 @@ function renderHistory() {
   wrap.replaceChildren(...content);
 }
 
+function setBuildVersionMarker() {
+  const marker = document.querySelector('.app-version');
+  if (marker) marker.textContent = BUILD_VERSION;
+}
+
 /* ---- boot -------------------------------------------------------------- */
 
+setBuildVersionMarker();
 bindTheme();
 
 $("#build").addEventListener("click", buildWeek);
