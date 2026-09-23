@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Bronco Fuel — Cafeteria Meal Planner",
+  "short_name": "Bronco Fuel",
+  "description": "Hit your macros with what the dining hall is actually serving.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0033A0",
+  "theme_color": "#0033A0",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
