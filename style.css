@@ -329,7 +329,7 @@ footer { margin: 26px 4px; }
 .station-pref-group { display:flex; flex-wrap:wrap; gap:7px 14px; align-items:center; padding-top:8px; border-top:1px solid var(--line); }
 .station-pref-group strong { width:100%; color:var(--orange); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
 .station-pref-check { margin:0; font-size:.85rem; }
-.drink-extra { grid-column: span 1; }
+.drink-extra { grid-column: 1 / -1; }
 .drink-add-row { display:grid; grid-template-columns:minmax(0, 1fr); gap:8px; align-items:stretch; }
 .drink-add-row .extra-select { width:100%; min-width:0; }
 .add-drink { white-space:nowrap; width:100%; }

@@ -40,7 +40,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Manual Planning + Station Serving v13 · 2026-09-23 · 10:45 MDT';
+const BUILD_VERSION = 'Manual Planning + Station Serving v15 · 2026-09-24 · 11:00 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
@@ -521,6 +521,24 @@ function shiftCaloriesToLaterMeal(day, meal, calories) {
   }
 }
 
+function shiftUnusedCaloriesToLaterMeal(day, meal, calories) {
+  let remaining = Math.max(0, Math.round(calories));
+  if (!remaining) return;
+  for (const { day: laterDay, meal: laterMeal } of laterMealSequence(day, meal)) {
+    if (remaining <= 0 || isMealEaten(laterDay, laterMeal)) continue;
+
+    // Move the unused calories into the next available meal's budget. This is
+    // an allocation change, not a re-plan, so already-selected foods stay put.
+    const oldBudget = Number(laterMeal.budget?.calories) || 0;
+    laterMeal.budget.calories = oldBudget + remaining;
+    laterMeal.calorieAdjustment = `* This meal has been adjusted because ${meal.periodName} used ${remaining.toLocaleString()} fewer calories than planned.`;
+    remaining = 0;
+  }
+  if (remaining > 0) {
+    meal.calorieOverflowUnallocated = remaining;
+  }
+}
+
 function addExtraWithoutReplanning(day, meal, item, type, selected) {
   selected.push(cloneExtra(item));
   manualMealTotals(meal);
@@ -968,7 +986,21 @@ function snapshotMeal(day, meal) {
 function toggleMealEaten(day, meal, checked) {
   if (isPastDate(day.date) || isFutureDate(day.date)) return;
   const records = mealHistory().filter((r) => r.key !== mealRecordKey(day, meal));
-  if (checked) records.push(snapshotMeal(day, meal));
+  if (checked) {
+    records.push(snapshotMeal(day, meal));
+
+    // If the planned meal came in under its calorie budget, move those unused
+    // calories into a later uneaten meal so the day's allocation stays intact.
+    // Only do this once for a meal, so toggling the checkbox off/on cannot
+    // repeatedly inflate later meal budgets.
+    if (!meal.calorieUnderallocationMoved) {
+      const unused = Math.max(0, Math.round((Number(meal.budget?.calories) || 0) - (Number(meal.result?.totals?.calories) || 0)));
+      if (unused > 0) {
+        shiftUnusedCaloriesToLaterMeal(day, meal, unused);
+        meal.calorieUnderallocationMoved = unused;
+      }
+    }
+  }
   saveMealHistory(records);
   renderWeek();
   saveSavedPlan();
@@ -1051,32 +1083,53 @@ function manualMealTotals(meal) {
 
 function manualAddOptions(meal) {
   const pool = currentMainPool(meal);
-  const extraT = extrasTotals(meal.result.extras);
-  const mainBudget = {
-    calories: Math.max(0, meal.budget.calories - extraT.calories),
-    protein: Math.max(0, meal.budget.protein - extraT.protein),
-    fatMax: meal.budget.fatMax == null ? null : Math.max(0, meal.budget.fatMax - extraT.fat),
-    carbMax: meal.budget.carbMax == null ? null : Math.max(0, meal.budget.carbMax - extraT.carbs),
-  };
-  const picks = meal.result.picks || [];
+  const extras = meal.result?.extras || { fruits: [], vegetables: [], drinks: [] };
+  const extraT = extrasTotals(extras);
+
+  // Always derive the current manual-food totals directly from the actual picks.
+  // Do not trust result.mainTotals here: saved plans and older builds can carry
+  // a stale cached total, which can make the picker hide perfectly valid foods.
+  const currentMain = (meal.result?.picks || []).reduce((t, p) => {
+    const servings = Number(p.servings) || 0;
+    t.calories += (Number(p.item.calories) || 0) * servings;
+    t.protein += (Number(p.item.protein) || 0) * servings;
+    t.carbs += (Number(p.item.carbs) || 0) * servings;
+    t.fat += (Number(p.item.fat) || 0) * servings;
+    return t;
+  }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+  const remainingCalories = Math.max(0, (Number(meal.budget.calories) || 0) - extraT.calories - currentMain.calories);
+  const remainingFat = meal.budget.fatMax == null ? null : Math.max(0, meal.budget.fatMax - extraT.fat - currentMain.fat);
+  const remainingCarbs = meal.budget.carbMax == null ? null : Math.max(0, meal.budget.carbMax - extraT.carbs - currentMain.carbs);
+  const picks = meal.result?.picks || [];
   const currentByKey = new Map(picks.map((p) => [itemKey(p.item.station, p.item.name), p]));
+
   return pool
     .map((item) => {
       const key = itemKey(item.station, item.name);
       const existing = currentByKey.get(key);
       const max = maxServingsForItem(item);
       if (existing && existing.servings >= max) return null;
+
+      const calories = Number(item.calories) || 0;
+      const protein = Number(item.protein) || 0;
+      const carbs = Number(item.carbs) || 0;
+      const fat = Number(item.fat) || 0;
+
+      // The picker is intentionally a one-serving-at-a-time control. An item is
+      // available whenever that next serving itself fits in the actual calories
+      // remaining, rather than comparing against a stale cached total.
+      if (calories > remainingCalories + 1e-9) return null;
+      if (remainingFat != null && fat > remainingFat + 1e-9) return null;
+      if (remainingCarbs != null && carbs > remainingCarbs + 1e-9) return null;
+
       const totals = {
-        calories: (meal.result.mainTotals?.calories || 0) + item.calories,
-        protein: (meal.result.mainTotals?.protein || 0) + item.protein,
-        carbs: (meal.result.mainTotals?.carbs || 0) + item.carbs,
-        fat: (meal.result.mainTotals?.fat || 0) + item.fat,
+        calories: currentMain.calories + calories + extraT.calories,
+        protein: currentMain.protein + protein + extraT.protein,
+        carbs: currentMain.carbs + carbs + extraT.carbs,
+        fat: currentMain.fat + fat + extraT.fat,
       };
-      if (totals.calories > mainBudget.calories + 1e-9) return null;
-      if (mainBudget.fatMax != null && totals.fat > mainBudget.fatMax + 1e-9) return null;
-      if (mainBudget.carbMax != null && totals.carbs > mainBudget.carbMax + 1e-9) return null;
-      const fullTotals = combinedTotals(totals, meal.result.extras);
-      return { item, totals: fullTotals, station: item.station, existing };
+      return { item, totals, station: item.station, existing };
     })
     .filter(Boolean)
     .sort((a, b) => b.item.protein - a.item.protein || a.item.calories - b.item.calories || a.item.name.localeCompare(b.item.name));
@@ -1146,9 +1199,40 @@ function renderManualFoodPicker(day, meal) {
     return details;
   });
 
+  const extraOptions = [];
+  const extraGroup = (type, label, key) => {
+    const extras = meal.result.extras?.options?.[key] || [];
+    if (!extras.length) return null;
+    const selected = meal.result.extras[type] || (meal.result.extras[type] = []);
+    const details = h('details',{class:'manual-food-group'});
+    const rows = extras.map((item) => h('button',{
+      type:'button', class:'manual-food-row',
+      onclick:() => {
+        requestExtraAdd(day, meal, item, key === 'fruit' ? 'fruit' : 'vegetable', label, selected);
+        details.open = false;
+      },
+      title:`Add ${item.name}`
+    },
+      h('span',{class:'manual-food-name'},item.name),
+      h('span',{class:'manual-food-stats'},
+        h('span',{},`+${Math.round(item.protein || 0)}g protein`),
+        h('span',{},`+${Math.round(item.calories || 0)} cal`)
+      )
+    ));
+    details.append(
+      h('summary',{},`${label} · ${extras.length}`),
+      h('div',{class:'manual-food-list'},...rows)
+    );
+    return details;
+  };
+  const fruitGroup = extraGroup('fruits','Fruit','fruit');
+  const vegetableGroup = extraGroup('vegetables','Vegetables','vegetable');
+  if (fruitGroup) extraOptions.push(fruitGroup);
+  if (vegetableGroup) extraOptions.push(vegetableGroup);
+
   return h('div',{class:'manual-picker'},
-    h('div',{class:'manual-picker-title'},'Add food',h('span',{class:'dim small'},`${options.length} choices`)),
-    h('div',{class:'manual-picker-scroll'}, topDetails, ...stationGroups),
+    h('div',{class:'manual-picker-title'},'Add food',h('span',{class:'dim small'},`${options.length + extraOptions.reduce((n, g) => n + ((g.querySelector?.('.manual-food-list')?.children.length) || 0), 0)} choices`)),
+    h('div',{class:'manual-picker-scroll'}, topDetails, ...stationGroups, ...extraOptions),
     h('div',{class:'dim small manual-picker-note'},`Options over this meal's calorie${meal.budget.calories === 1 ? '' : ' '}budget are hidden. Served stations allow 1 serving; self-serve stations allow up to 3.`)
   );
 }
@@ -1404,7 +1488,7 @@ function renderMeal(day, meal) {
       );
     })
   ));
-  const extraCards = [['fruit','Fruit','🍎'],['vegetable','Vegetable','🥦'],['drink','Drink','🥛']].map(([type,label,icon]) => renderExtraSelector(day, meal, type, label, icon));
+  const extraCards = (meal.result.manual ? [['drink','Drink','🥛']] : [['drink','Drink','🥛']]).map(([type,label,icon]) => renderExtraSelector(day, meal, type, label, icon));
   const eaten = isMealEaten(day, meal);
   const empty = !meal.result.picks.length;
   const mealKey = `${day.date}::${meal.canonical}::${meal.periodId}`;
