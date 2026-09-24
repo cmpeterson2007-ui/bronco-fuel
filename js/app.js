@@ -40,7 +40,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Manual Planning + Station Serving v15 · 2026-09-24 · 11:00 MDT';
+const BUILD_VERSION = 'Manual Planning + Station Serving v17 · 2026-09-24 · 11:30 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
@@ -124,6 +124,37 @@ function saveSettings() {
 
 function saveExcluded() {
   localStorage.setItem("bf.excluded", JSON.stringify([...excluded]));
+}
+
+function clearManualRemovedKeys(plan) {
+  for (const day of (plan || [])) {
+    for (const meal of (day.meals || [])) delete meal.manualRemovedKeys;
+  }
+}
+
+function resetExcludedItems() {
+  excluded = new Set();
+  saveExcluded();
+
+  // Manual-plan removals are temporary choices, not permanent exclusions.
+  // Clear any legacy manualRemovedKeys from the active plan as well.
+  clearManualRemovedKeys(weekPlan);
+  if (weekPlan.length) saveSavedPlan();
+
+  // Also repair a saved manual plan that may have been polluted by the old bug,
+  // so switching back to manual mode does not resurrect the exclusions.
+  try {
+    const key = planStorageKey('manual');
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
+    if (saved?.weekPlan?.length) {
+      clearManualRemovedKeys(saved.weekPlan);
+      localStorage.setItem(key, JSON.stringify(saved));
+    }
+  } catch (err) { console.warn('Could not repair saved manual plan:', err); }
+
+  renderWeek();
+  setStatus("Cleared your excluded-items list and restored manually removed foods.", "info");
+  setTimeout(() => setStatus(""), 2500);
 }
 
 /* ---- tiny DOM helpers ------------------------------------------------ */
@@ -1477,7 +1508,8 @@ function renderMeal(day, meal) {
         } }, 'Swap') : null,
         !past ? h('button', { class: 'swap remove-item', title: 'Remove this item and recalculate the meal', onclick: () => {
           if (settings.planningStyle === 'manual' || meal.result.manual) {
-            meal.manualRemovedKeys = [...new Set([...(meal.manualRemovedKeys || []), itemKey(pick.item.station, pick.item.name)])];
+            // Removing a food from a manual plan is a one-time plan edit.
+            // Do NOT add it to the permanent excluded-items list or manualRemovedKeys.
             meal.result.picks = meal.result.picks.filter((p) => p !== pick);
             manualMealTotals(meal);
             renderWeek(); saveSavedPlan();
@@ -1831,12 +1863,7 @@ $("#retry").addEventListener("click", () => {
   $("#retry").hidden = true;
   initPickers();
 });
-$("#reset-excluded").addEventListener("click", () => {
-  excluded = new Set();
-  saveExcluded();
-  setStatus("Cleared your excluded-items list.", "info");
-  setTimeout(() => setStatus(""), 2000);
-});
+$("#reset-excluded").addEventListener("click", resetExcludedItems);
 
 bindGoalInputs();
 bindPlanMode();
