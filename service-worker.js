@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bronco-fuel-v20260924-16';
+const CACHE_NAME = 'bronco-fuel-v20260924-18';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const APP_SHELL = [
   '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
-  '/js/app.js',
+  '/js/app.js?v=20260924-v18',
   '/js/api.js',
   '/js/planner.js'
 ];
