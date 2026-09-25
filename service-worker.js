@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bronco-fuel-v20260925-20';
+const CACHE_NAME = 'bronco-fuel-v20260925-21';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const APP_SHELL = [
   '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
-  '/js/app.js',
+  '/js/app.js?v=20260925-v21',
   '/js/api.js',
   '/js/planner.js'
 ];
@@ -37,6 +37,13 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
+
+  // Always fetch the service worker script itself from the network so an
+  // installed PWA cannot keep an old worker indefinitely.
+  if (url.pathname.endsWith('/service-worker.js')) {
+    event.respondWith(fetch(request, { cache: 'no-store' }));
+    return;
+  }
 
   // Never cache DineOnCampus API requests here. The app needs fresh menu data.
   if (url.origin !== self.location.origin) return;

@@ -40,7 +40,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Manual Planning + Station Serving v20 · 2026-09-25 · 09:45 MDT';
+const BUILD_VERSION = 'Manual Planning + Station Serving v21 · 2026-09-25 · 17:10 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
@@ -1099,9 +1099,15 @@ function renderDayNavigator() {
 }
 
 function currentMainPool(meal) {
-  // Manual planning is an editable food roster. A removed item is not a permanent
-  // exclusion, so legacy manualRemovedKeys are intentionally ignored here.
-  return buildCandidatePool(meal.stations || [], { ...prefs(), mealCanonical: meal.canonical });
+  // Manual planning is an editable food roster. Global exclusions are an
+  // auto-planning preference, not a reason to hide foods from the manual
+  // picker. This also prevents old exclusion state from making a phone appear
+  // to have no foods left after a reset.
+  return buildCandidatePool(meal.stations || [], {
+    ...prefs(),
+    excluded: new Set(),
+    mealCanonical: meal.canonical,
+  });
 }
 
 function manualMealTotals(meal) {
@@ -1419,22 +1425,25 @@ async function resetMeal(day, meal, locationId = meal.locationId || settings.loc
   const targetLocationName = locationNameFor(locationId);
   setStatus(`Resetting ${meal.periodName.toLowerCase()} at ${targetLocationName}…`);
   try {
-    const rebuilt = await buildMealAtLocation(
-      day.date,
-      meal.canonical,
-      targetBudget,
-      locationId,
-      new Map(),
-      {
-        randomize: true,
-        resetNonce: Date.now() + Math.random(),
-        resetStrict: true,
-        period: (!previousLocation || String(locationId) === String(previousLocation.locationId)) && meal.periodId
-          ? { id: meal.periodId, name: meal.sourcePeriodName || meal.periodName, slug: String(meal.sourcePeriodName || meal.periodName || '').toLowerCase() }
-          : null,
-        avoidKeys: (meal.result?.picks || []).map((p) => itemKey(p.item.station, p.item.name)),
-      }
+    const period = (!previousLocation || String(locationId) === String(previousLocation.locationId)) && meal.periodId
+      ? { id: meal.periodId, name: meal.sourcePeriodName || meal.periodName, slug: String(meal.sourcePeriodName || meal.periodName || '').toLowerCase() }
+      : null;
+    const avoidKeys = (meal.result?.picks || []).map((p) => itemKey(p.item.station, p.item.name));
+
+    // First try to make a genuinely different meal. If the menu is small,
+    // however, strict avoidance can exclude every viable food. In that case
+    // fall back to a normal randomized rebuild rather than returning an empty
+    // meal. This is especially important after repeated resets.
+    let rebuilt = await buildMealAtLocation(
+      day.date, meal.canonical, targetBudget, locationId, new Map(),
+      { randomize: true, resetNonce: Date.now() + Math.random(), resetStrict: true, period, avoidKeys }
     );
+    if (!(rebuilt.result?.picks || []).length) {
+      rebuilt = await buildMealAtLocation(
+        day.date, meal.canonical, targetBudget, locationId, new Map(),
+        { randomize: true, resetNonce: Date.now() + Math.random(), period }
+      );
+    }
     Object.assign(meal, rebuilt);
     renderWeek();
     saveSavedPlan();
