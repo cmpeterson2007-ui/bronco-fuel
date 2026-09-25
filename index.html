@@ -153,10 +153,23 @@
     Nutrition values are the cafeteria’s own estimates — treat them as a guide, not gospel.
   </footer>
 
-  <script type="module" src="js/app.js?v=20260924-v18"></script>
+  <script type="module" src="js/app.js?v=20260925-v19"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js'));
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+      window.addEventListener('load', async () => {
+        try {
+          const registration = await navigator.serviceWorker.register('./service-worker.js?v=20260925-v19', { updateViaCache: 'none' });
+          await registration.update();
+        } catch (err) {
+          console.warn('Service worker update check failed:', err);
+        }
+      });
     }
   </script>
 </body>

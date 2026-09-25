@@ -1,4 +1,4 @@
-import { getSchools, getLocations, getPeriods, getMenu } from "./api.js";
+import { getSchools, getLocations, getPeriods, getMenu } from "./api.js?v=20260925-v19";
 import {
   buildCandidatePool,
   optimizeMeal,
@@ -6,7 +6,7 @@ import {
   canonicalMeal,
   itemKey,
   maxServingsForItem,
-} from "./planner.js";
+} from "./planner.js?v=20260925-v19";
 
 /* ---- settings ------------------------------------------------------- */
 
@@ -40,7 +40,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Manual Planning + Station Serving v18 · 2026-09-24 · 12:15 MDT';
+const BUILD_VERSION = 'Manual Planning + Station Serving v19 · 2026-09-25 · 09:30 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
@@ -90,6 +90,10 @@ function loadSavedPlan(style = settings.planningStyle || "auto") {
     if (!saved?.weekPlan?.length) return false;
     if (saved.locationId && settings.locationId && saved.locationId !== settings.locationId) return false;
     if (saved.signature !== planSettingsSignature()) return false;
+    // Older builds could persist manualRemovedKeys after removing a food through
+    // the calorie-overflow dialog. Those keys must never permanently hide foods
+    // from the manual picker. Repair them when a saved plan is loaded.
+    clearManualRemovedKeys(saved.weekPlan);
     weekPlan = saved.weekPlan;
     activeDate = saved.activeDate || activeDate;
     localStorage.setItem("bf.activeDate", activeDate);
@@ -506,7 +510,7 @@ function removeMealItemForExtra(day, meal, option) {
   if (option.kind === 'food') {
     const pick = meal.result.picks[option.index];
     if (!pick) return;
-    meal.manualRemovedKeys = [...new Set([...(meal.manualRemovedKeys || []), itemKey(pick.item.station, pick.item.name)])];
+    // This is a one-time manual-plan edit, not a permanent exclusion.
     meal.result.picks.splice(option.index, 1);
     manualMealTotals(meal);
   } else {
@@ -1095,9 +1099,9 @@ function renderDayNavigator() {
 }
 
 function currentMainPool(meal) {
-  const removed = new Set(meal.manualRemovedKeys || []);
-  return buildCandidatePool(meal.stations || [], { ...prefs(), mealCanonical: meal.canonical })
-    .filter((item) => !removed.has(itemKey(item.station, item.name)));
+  // Manual planning is an editable food roster. A removed item is not a permanent
+  // exclusion, so legacy manualRemovedKeys are intentionally ignored here.
+  return buildCandidatePool(meal.stations || [], { ...prefs(), mealCanonical: meal.canonical });
 }
 
 function manualMealTotals(meal) {
