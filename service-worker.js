@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bronco-fuel-v20260925-19';
+const CACHE_NAME = 'bronco-fuel-v20260925-20';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -7,9 +7,9 @@ const APP_SHELL = [
   '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
-  '/js/app.js?v=20260925-v19',
-  '/js/api.js?v=20260925-v19',
-  '/js/planner.js?v=20260925-v19'
+  '/js/app.js',
+  '/js/api.js',
+  '/js/planner.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -44,7 +44,7 @@ self.addEventListener('fetch', (event) => {
   // Navigation requests: use the cached app shell when offline.
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request, { cache: 'no-store' })
+      fetch(request)
         .then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
@@ -57,7 +57,7 @@ self.addEventListener('fetch', (event) => {
 
   // Static app assets: network first so updates arrive quickly, cached fallback offline.
   event.respondWith(
-    fetch(request, { cache: 'no-store' })
+    fetch(request)
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();

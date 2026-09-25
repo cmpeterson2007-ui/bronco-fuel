@@ -1,4 +1,4 @@
-import { getSchools, getLocations, getPeriods, getMenu } from "./api.js?v=20260925-v19";
+import { getSchools, getLocations, getPeriods, getMenu } from "./api.js";
 import {
   buildCandidatePool,
   optimizeMeal,
@@ -6,7 +6,7 @@ import {
   canonicalMeal,
   itemKey,
   maxServingsForItem,
-} from "./planner.js?v=20260925-v19";
+} from "./planner.js";
 
 /* ---- settings ------------------------------------------------------- */
 
@@ -40,7 +40,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Manual Planning + Station Serving v19 · 2026-09-25 · 09:30 MDT';
+const BUILD_VERSION = 'Manual Planning + Station Serving v20 · 2026-09-25 · 09:45 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
