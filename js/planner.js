@@ -14,6 +14,13 @@ const MAX_DISTINCT = 5;
 const SINGLE_SERVING_STATIONS = /\b(homestyle|flame|la\s*mesa|create|delicious\s+without)\b/i;
 
 export function maxServingsForItem(item) {
+  if (item?.pandaExpress) {
+    // Panda's Boise State ordering flow allows up to three entrees, either
+    // repeated or mixed. Sides remain a one-choice component; add-ons can be
+    // selected independently. The total entree count is enforced by the app
+    // when building a Panda order/manual selection.
+    return item.pandaRole === 'side' ? 1 : MAX_SERVINGS;
+  }
   return SINGLE_SERVING_STATIONS.test(String(item?.station || '')) ? 1 : MAX_SERVINGS;
 }
 const MIN_ITEM_CALORIES = 40; // skip condiments, sauces, black coffee, etc.
@@ -203,6 +210,31 @@ function buildFlameOmelet(pool, budget, usageMap, options = {}) {
   return { picks: base, totals: total, flameOmelet: true };
 }
 
+function buildPandaOrder(pool, budget, usageMap, options = {}) {
+  const entrees = pool.filter((x) => x.pandaExpress && x.pandaRole === 'entree');
+  const sides = pool.filter((x) => x.pandaExpress && x.pandaRole === 'side');
+  if (!entrees.length || !sides.length) return null;
+
+  const totalsOfPair = (entree, side) => ({
+    calories: entree.calories + side.calories,
+    protein: entree.protein + side.protein,
+    carbs: entree.carbs + side.carbs,
+    fat: entree.fat + side.fat,
+  });
+
+  let best = null;
+  for (const entree of entrees) for (const side of sides) {
+    const picks = [{ item: entree, servings: 1 }, { item: side, servings: 1 }];
+    const totals = totalsOfPair(entree, side);
+    const keys = picks.map((p) => itemKey(p.item.station, p.item.name));
+    const varietyPenalty = keys.reduce((sum, key) => sum + (usageMap.get(key) || 0) * 25, 0);
+    const resetPenalty = options.avoidKeys?.reduce((sum, key) => sum + (keys.includes(key) ? 260 : 0), 0) || 0;
+    const score = scorePlan(totals, budget, varietyPenalty, 0) + resetPenalty + (options.randomize ? Math.random() * 14 : 0);
+    if (!best || score < best.score - 1e-9) best = { picks, totals, score };
+  }
+  return best ? { picks: best.picks, totals: best.totals, pandaOrder: true } : null;
+}
+
 export function optimizeMeal(pool, budget, usageMap = new Map(), options = {}) {
   if (!pool.length) return { picks: [], totals: { calories: 0, protein: 0, carbs: 0, fat: 0 } };
 
@@ -219,6 +251,14 @@ export function optimizeMeal(pool, budget, usageMap = new Map(), options = {}) {
       const calorieNeeded = Math.max(150, budget.calories * 0.55);
       if (fresh.totals.protein >= proteinNeeded || fresh.totals.calories >= calorieNeeded) return fresh;
     }
+  }
+
+  // Panda Express is a fixed-order menu in the app: choose exactly one entree
+  // and one side. Optional add-ons remain available to the manual picker but are
+  // not automatically added to the meal.
+  if (pool.some((x) => x.pandaExpress)) {
+    const panda = buildPandaOrder(pool, budget, usageMap, options);
+    if (panda) return panda;
   }
 
   // A reset can request a fresh randomized search order. Normal planning remains

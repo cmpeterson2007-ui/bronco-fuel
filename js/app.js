@@ -1,4 +1,5 @@
 import { getSchools, getLocations, getPeriods, getMenu } from "./api.js";
+import { getPandaExpressMenu, isPandaExpressLocation } from "./panda.js";
 import {
   buildCandidatePool,
   optimizeMeal,
@@ -40,7 +41,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Manual Planning + Station Serving v21 · 2026-09-25 · 17:10 MDT';
+const BUILD_VERSION = 'Guardrails + Supported Dining v25 · 2026-10-05 · 15:20 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
@@ -216,19 +217,49 @@ function dayLabel(d) {
 
 /* ---- setup UI -------------------------------------------------------- */
 
+const SUPPORTED_SCHOOL_RE = /boise\s+state/i;
+const SUPPORTED_LOCATION_TESTS = [
+  { re: /buster/i, label: "Buster's Kitchen" },
+  { re: /southfork/i, label: "SouthFork Dining" },
+  { re: /panda\s*express/i, label: "Panda Express" },
+];
+
+function isSupportedSchool(school) {
+  return SUPPORTED_SCHOOL_RE.test(String(school?.name || ""));
+}
+
+function supportedLocationInfo(location) {
+  const name = String(location?.name || "");
+  return SUPPORTED_LOCATION_TESTS.find((x) => x.re.test(name)) || null;
+}
+
+function supportedLocation(location) {
+  return !!supportedLocationInfo(location);
+}
+
+function comingSoonOptionLabel(name) {
+  return `🔒 ${name} — coming soon`;
+}
+
 async function initPickers() {
   const schoolSel = $("#school");
   const locSel = $("#location");
   try {
     setStatus("Loading schools…");
     const schools = await getSchools();
-    schools.sort((a, b) => a.name.localeCompare(b.name));
-    schoolSel.replaceChildren(...schools.map((s) => h("option", { value: s.id }, s.name)));
+    schools.sort((a, b) => Number(!isSupportedSchool(a)) - Number(!isSupportedSchool(b)) || a.name.localeCompare(b.name));
+    schoolSel.replaceChildren(...schools.map((s) => h("option", {
+      value: s.id,
+      disabled: !isSupportedSchool(s),
+      title: isSupportedSchool(s) ? "" : "Coming soon",
+    }, isSupportedSchool(s) ? s.name : comingSoonOptionLabel(s.name))));
 
+    const supportedSchools = schools.filter(isSupportedSchool);
     let school =
-      schools.find((s) => s.id === settings.schoolId) ||
-      schools.find((s) => s.name.toLowerCase().includes("boise state")) ||
-      schools[0];
+      supportedSchools.find((s) => s.id === settings.schoolId) ||
+      supportedSchools[0];
+    if (!school) throw new Error("Boise State University is not available in the school list right now.");
+
     schoolSel.value = school.id;
     settings.schoolId = school.id;
     settings.schoolName = school.name;
@@ -247,15 +278,32 @@ async function initPickers() {
   }
 
   schoolSel.addEventListener("change", async () => {
+    const school = Array.from(schoolSel.options).find((o) => o.value === schoolSel.value);
+    if (!school || school.disabled) {
+      const supported = Array.from(schoolSel.options).find((o) => !o.disabled);
+      if (supported) schoolSel.value = supported.value;
+      return;
+    }
     settings.schoolId = schoolSel.value;
-    settings.schoolName = schoolSel.selectedOptions[0]?.textContent || "";
+    settings.schoolName = school.textContent || "";
     settings.locationId = null;
     await refreshLocations();
     saveSettings();
   });
   locSel.addEventListener("change", () => {
+    const location = availableLocations.find((l) => String(l.id) === String(locSel.value));
+    if (!supportedLocation(location)) {
+      const supported = availableLocations.find(supportedLocation);
+      if (supported) {
+        locSel.value = supported.id;
+        settings.locationId = supported.id;
+        settings.locationName = supported.name;
+        saveSettings();
+      }
+      return;
+    }
     settings.locationId = locSel.value;
-    settings.locationName = locSel.selectedOptions[0]?.textContent || "";
+    settings.locationName = location?.name || "";
     saveSettings();
   });
 }
@@ -264,13 +312,21 @@ async function refreshLocations() {
   const locSel = $("#location");
   locSel.replaceChildren(h("option", {}, "Loading…"));
   const locs = await getLocations(settings.schoolId);
-  locs.sort((a, b) => a.name.localeCompare(b.name));
+  locs.sort((a, b) => Number(!supportedLocation(a)) - Number(!supportedLocation(b)) || a.name.localeCompare(b.name));
   availableLocations = locs;
-  locSel.replaceChildren(...locs.map((l) => h("option", { value: l.id }, l.name)));
+  locSel.replaceChildren(...locs.map((l) => {
+    const supported = supportedLocation(l);
+    return h("option", {
+      value: l.id,
+      disabled: !supported,
+      title: supported ? "" : "Coming soon",
+    }, supported ? l.name : comingSoonOptionLabel(l.name));
+  }));
+
   const loc =
-    locs.find((l) => l.id === settings.locationId) ||
-    locs.find((l) => l.name.toLowerCase().includes("buster")) ||
-    locs[0];
+    locs.find((l) => String(l.id) === String(settings.locationId) && supportedLocation(l)) ||
+    locs.find((l) => /buster/i.test(String(l.name || ""))) ||
+    locs.find(supportedLocation);
   if (loc) {
     locSel.value = loc.id;
     settings.locationId = loc.id;
@@ -774,6 +830,20 @@ function chooseOrdinaryPeriod(periods, matcher) {
 
 function selectThreeMealPeriods(periods, dateStr = activeDate) {
   const list = Array.isArray(periods) ? periods : [];
+
+  // Panda Express is an all-day restaurant at the Student Union. Its
+  // DineOnCampus period is not always labeled consistently, so once the user
+  // selects Panda we deliberately expose the same static menu to all three
+  // planner meal cards.
+  if (isPandaExpressLocation(locationNameFor(settings.locationId)) && list.length) {
+    const source = list.find((p) => /all[ -]?day/i.test(periodText(p))) || list[0];
+    return [
+      { period: source, canonical: 'breakfast', displayCanonical: 'breakfast', periodName: 'Breakfast' },
+      { period: source, canonical: 'lunch', displayCanonical: 'lunch', periodName: 'Lunch' },
+      { period: source, canonical: 'dinner', displayCanonical: 'dinner', periodName: 'Dinner' },
+    ];
+  }
+
   const weekend = isWeekendDate(dateStr);
 
   /*
@@ -873,7 +943,9 @@ async function buildMealAtLocation(dateStr, canonical, budget, locationId, usage
     period = selectPeriodForMeal(periods, canonical, dateStr);
   }
   if (!period) throw new Error(`No ${canonical} menu is published at ${locationNameFor(locationId)} for this date.`);
-  const stations = await getMenu(locationId, dateStr, period.id);
+  const stations = isPandaExpressLocation(locationNameFor(locationId))
+    ? getPandaExpressMenu()
+    : await getMenu(locationId, dateStr, period.id);
   const extras = buildMealExtras(stations);
   const mainBudget = budgetAfterExtras(budget, extras);
   const pool = buildCandidatePool(stations, { ...prefs(), mealCanonical: canonical });
@@ -1050,7 +1122,10 @@ function dayForDate(dateStr) { return weekPlan.find((d) => d.date === dateStr) |
 function setActiveDate(dateStr) {
   activeDate = dateStr;
   localStorage.setItem("bf.activeDate", activeDate);
+  const exerciseDate = $('#exercise-date');
+  if (exerciseDate) exerciseDate.value = activeDate;
   renderWeek();
+  renderExerciseLog();
   saveSavedPlan();
 }
 
@@ -1110,6 +1185,26 @@ function currentMainPool(meal) {
   });
 }
 
+function pandaEntreeServings(picks = []) {
+  return (picks || []).reduce((total, p) => {
+    return total + (p.item?.pandaExpress && p.item.pandaRole === 'entree' ? (Number(p.servings) || 0) : 0);
+  }, 0);
+}
+
+function pandaChoiceConflict(item, picks) {
+  // Panda allows up to three total entree servings, including repeated or
+  // different entrees. The side is still a one-choice component. Add-ons are
+  // independent.
+  if (!item?.pandaExpress) return false;
+  if (item.pandaRole === 'side') {
+    return (picks || []).some((p) => p.item?.pandaExpress && p.item.pandaRole === 'side');
+  }
+  if (item.pandaRole === 'entree') {
+    return pandaEntreeServings(picks) >= 3;
+  }
+  return false;
+}
+
 function manualMealTotals(meal) {
   const mainTotals = (meal.result?.picks || []).reduce((t, p) => {
     t.calories += p.item.calories * p.servings;
@@ -1151,6 +1246,7 @@ function manualAddOptions(meal) {
       const existing = currentByKey.get(key);
       const max = maxServingsForItem(item);
       if (existing && existing.servings >= max) return null;
+      if (pandaChoiceConflict(item, picks)) return null;
 
       const calories = Number(item.calories) || 0;
       const protein = Number(item.protein) || 0;
@@ -1179,6 +1275,7 @@ function manualAddOptions(meal) {
 function addManualFood(day, meal, item) {
   if (isPastDate(day.date) || isMealEaten(day, meal)) return;
   const key = itemKey(item.station, item.name);
+  if (pandaChoiceConflict(item, meal.result.picks || [])) return;
   const max = maxServingsForItem(item);
   const existing = (meal.result.picks || []).find((p) => itemKey(p.item.station, p.item.name) === key);
   if (existing) {
@@ -1274,7 +1371,7 @@ function renderManualFoodPicker(day, meal) {
   return h('div',{class:'manual-picker'},
     h('div',{class:'manual-picker-title'},'Add food',h('span',{class:'dim small'},`${options.length + extraOptions.reduce((n, g) => n + ((g.querySelector?.('.manual-food-list')?.children.length) || 0), 0)} choices`)),
     h('div',{class:'manual-picker-scroll'}, topDetails, ...stationGroups, ...extraOptions),
-    h('div',{class:'dim small manual-picker-note'},`Options over this meal's calorie${meal.budget.calories === 1 ? '' : ' '}budget are hidden. Served stations allow 1 serving; self-serve stations allow up to 3.`)
+    h('div',{class:'dim small manual-picker-note'},`Options over this meal's calorie${meal.budget.calories === 1 ? '' : ' '}budget are hidden. Served stations allow 1 serving; self-serve stations allow up to 3.${meal.stations?.some((g) => g.items?.some((x) => x.pandaExpress)) ? ' Panda Express orders can include up to 3 entrées + 1 side; add-ons are optional.' : ''}`)
   );
 }
 
@@ -1467,12 +1564,20 @@ function renderMealLocationSelector(day, meal) {
   const locked = isPastDate(day.date);
   const selected = meal.locationId || settings.locationId;
   const choices = [...availableLocations].sort((a, b) => {
-    const special = (name) => /panda express|la tapatia/i.test(name) ? 0 : /buster/i.test(name) ? 1 : 2;
-    return special(a.name) - special(b.name) || a.name.localeCompare(b.name);
+    const supportedA = supportedLocation(a);
+    const supportedB = supportedLocation(b);
+    return Number(!supportedA) - Number(!supportedB) || a.name.localeCompare(b.name);
   });
   const locationChoices = choices.length ? choices : [{ id: selected, name: meal.locationName || settings.locationName || 'Current dining location' }];
   const select = h('select', { class: 'meal-location-select', disabled: locked, 'aria-label': `Eating location for ${meal.periodName}` },
-    ...locationChoices.map((loc) => h('option', { value: loc.id }, loc.name))
+    ...locationChoices.map((loc) => {
+      const supported = supportedLocation(loc);
+      return h('option', {
+        value: loc.id,
+        disabled: !supported,
+        title: supported ? '' : 'Coming soon',
+      }, supported ? loc.name : comingSoonOptionLabel(loc.name));
+    })
   );
   select.value = String(selected);
   if (select.value !== String(selected)) {
@@ -1732,7 +1837,9 @@ async function applyExerciseChange(affectedDates) {
 
 function renderExerciseLog() {
   const wrap = $('#exercise-log'); if (!wrap) return;
-  const items = getExercises().slice(-12).reverse();
+  // The exercise tab is scoped to the same day the meal planner is showing.
+  // Keep the stored history intact, but only surface activities for activeDate.
+  const items = getExercises().filter((e) => e.date === activeDate).reverse();
   wrap.replaceChildren(...items.map((e) => {
     const editBtn = h('button', { class:'swap', title:'Edit exercise', onclick:() => editExercise(e.id) }, 'Edit');
     const removeBtn = h('button', { class:'swap', title:'Remove exercise', onclick:() => removeExercise(e.id) }, '✕');
@@ -1810,7 +1917,7 @@ function bindExercise() {
   const form = $('#exercise-form'); if (!form) return;
   const button = $('#add-exercise');
   const activity = $('#exercise-activity'), pace = $('#exercise-pace'), ruck = $('#exercise-ruck'), date = $('#exercise-date');
-  date.value = fmtDate(new Date());
+  date.value = activeDate;
   function updateFields() {
     const needsPace = ['running','walking','rucking'].includes(activity.value);
     pace.parentElement.hidden = !needsPace;
@@ -1829,7 +1936,7 @@ function bindExercise() {
     const arr = getExercises();
     arr.push({ id:(globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`), date:date.value, activity:activity.value, activityLabel:ACTIVITY_LABELS[activity.value], minutes, weight, pace:['running','walking','rucking'].includes(activity.value) ? p : null, ruckWeight:activity.value === 'rucking' ? rw : 0, calories:Math.round(calories), proteinAdd:nut.proteinAdd, carbAdd:nut.carbAdd });
     saveExercises(arr); renderExerciseLog(); renderHistory();
-    form.reset(); date.value = fmtDate(new Date()); updateFields();
+    form.reset(); date.value = activeDate; updateFields();
     setStatus(`Exercise saved: ${Math.round(calories)} net calories added. Build/rebuild the plan to use the new target.`, 'info');
   };
   form.addEventListener('submit', save); if (button) { button.type='button'; button.addEventListener('click', save); }
@@ -1838,26 +1945,8 @@ function bindExercise() {
 
 /* ---- history --------------------------------------------------------- */
 function renderHistory() {
-  const details = $('#history'); if (!details) return;
-  let wrap = $('#history-content');
-  if (!wrap) { wrap = document.createElement('div'); wrap.id = 'history-content'; details.append(wrap); }
-  const records = mealHistory();
-  const byDate = {};
-  records.forEach(r => (byDate[r.date] ||= []).push(r));
-  const dates = Object.keys(byDate).sort().slice(-30);
-  const maxCal = Math.max(1, ...dates.map(d => byDate[d].reduce((a,r)=>a+r.calories,0)));
-  const maxPro = Math.max(1, ...dates.map(d => byDate[d].reduce((a,r)=>a+r.protein,0)));
-  const totalCal = records.reduce((a,r)=>a+r.calories,0), totalPro = records.reduce((a,r)=>a+r.protein,0);
-  const dayCount = Object.keys(byDate).length || 1;
-  const content = [
-    h('div',{class:'history-summary'},h('strong',{},'Recorded intake'),h('span',{},`${Math.round(totalCal/dayCount)} cal/day · ${Math.round(totalPro/dayCount)}g protein/day average`)),
-    dates.length ? h('div',{class:'history-chart'},...dates.map(d=>{
-      const c=byDate[d].reduce((a,r)=>a+r.calories,0), p=byDate[d].reduce((a,r)=>a+r.protein,0);
-      return h('div',{class:'history-row'},h('div',{class:'history-date'},d),h('div',{class:'history-bars'},h('div',{class:'history-bar cal',style:`width:${Math.max(8,Math.round(c/maxCal*100))}%`},`${Math.round(c)} cal`),h('div',{class:'history-bar pro',style:`width:${Math.max(8,Math.round(p/maxPro*100))}%`},`${Math.round(p)}g protein`)));
-    })) : h('div',{class:'dim pad'},'No meals recorded yet. Check “Ate as prescribed” after eating a planned meal.'),
-    ...dates.slice().reverse().map(d=>h('details',{class:'history-day'},h('summary',{},`${d} — ${Math.round(byDate[d].reduce((a,r)=>a+r.calories,0))} cal · ${Math.round(byDate[d].reduce((a,r)=>a+r.protein,0))}g protein`),...byDate[d].map(r=>h('div',{class:'history-meal'},h('strong',{},r.periodName),h('span',{class:'item-meta'},`${r.calories} cal · ${r.protein}g protein`),h('div',{class:'item-meta'},[...r.items.map(i=>`${i.servings}× ${i.name}`),...r.extras.map(x=>x.name)].join(' · '))))))
-  ];
-  wrap.replaceChildren(...content);
+  // Meal History is intentionally locked until the feature is released.
+  // Keep this hook as a no-op so exercise/meal updates cannot repopulate it.
 }
 
 function setBuildVersionMarker() {
