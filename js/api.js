@@ -81,17 +81,24 @@ export async function getLocations(siteId) {
   return locs;
 }
 
-export async function getPeriods(locationId, dateStr) {
+export async function getPeriods(locationId, dateStr, { forceRefresh = false } = {}) {
   const key = `periods.${locationId}.${dateStr}`;
-  const cached = cacheGet(key);
-  if (cached) return cached;
+  const cached = forceRefresh ? null : cacheGet(key);
+  // A one-period Breakfast/Lunch/Dinner response is often a transient partial
+  // DineOnCampus response. Do not trust that cached result: refresh it from the
+  // network so one mobile session cannot preserve a partial day for hours.
+  const looksPartial = (items) => Array.isArray(items) && items.length === 1 &&
+    /^(breakfast|lunch|dinner)$/i.test(String(items[0]?.name || '').trim());
+  if (cached && !looksPartial(cached)) return cached;
   const data = await apiGet(`/location/${encodeURIComponent(locationId)}/periods?platform=0&date=${dateStr}`);
   const periods = (data.periods || []).map((p) => ({
     id: p.id,
     name: p.name,
     slug: (p.slug || p.name || "").toLowerCase(),
   }));
-  cacheSet(key, periods, 6 * HOUR);
+  // Cache ordinary complete results for six hours, but only keep suspicious
+  // one-meal responses briefly so they are retried on the next visit.
+  cacheSet(key, periods, looksPartial(periods) ? 5 * 60 * 1000 : 6 * HOUR);
   return periods;
 }
 

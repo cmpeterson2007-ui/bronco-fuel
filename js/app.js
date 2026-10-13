@@ -41,13 +41,14 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Guardrails + Supported Dining v25 · 2026-10-05 · 15:20 MDT';
+const BUILD_VERSION = 'Exact Boise State School Selection v29 · 2026-10-13 · 15:35 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
 
 function planSettingsSignature() {
   return JSON.stringify({
+    plannerRevision: 29,
     schoolId: settings.schoolId,
     locationId: settings.locationId,
     planMode: settings.planMode,
@@ -217,7 +218,7 @@ function dayLabel(d) {
 
 /* ---- setup UI -------------------------------------------------------- */
 
-const SUPPORTED_SCHOOL_RE = /boise\s+state/i;
+const SUPPORTED_SCHOOL_NAME = 'boise state university';
 const SUPPORTED_LOCATION_TESTS = [
   { re: /buster/i, label: "Buster's Kitchen" },
   { re: /southfork/i, label: "SouthFork Dining" },
@@ -225,7 +226,9 @@ const SUPPORTED_LOCATION_TESTS = [
 ];
 
 function isSupportedSchool(school) {
-  return SUPPORTED_SCHOOL_RE.test(String(school?.name || ""));
+  // Match the actual university record only. A broad 'Boise State' match can
+  // accidentally select a separate Athletics Center record and break menus.
+  return String(school?.name || "").trim().toLowerCase() === SUPPORTED_SCHOOL_NAME;
 }
 
 function supportedLocationInfo(location) {
@@ -242,30 +245,35 @@ function comingSoonOptionLabel(name) {
 }
 
 async function initPickers() {
-  const schoolSel = $("#school");
-  const locSel = $("#location");
   try {
-    setStatus("Loading schools…");
+    setStatus("Loading Boise State dining locations…");
     const schools = await getSchools();
-    schools.sort((a, b) => Number(!isSupportedSchool(a)) - Number(!isSupportedSchool(b)) || a.name.localeCompare(b.name));
-    schoolSel.replaceChildren(...schools.map((s) => h("option", {
-      value: s.id,
-      disabled: !isSupportedSchool(s),
-      title: isSupportedSchool(s) ? "" : "Coming soon",
-    }, isSupportedSchool(s) ? s.name : comingSoonOptionLabel(s.name))));
-
-    const supportedSchools = schools.filter(isSupportedSchool);
-    let school =
-      supportedSchools.find((s) => s.id === settings.schoolId) ||
-      supportedSchools[0];
+    const school = schools.find(isSupportedSchool);
     if (!school) throw new Error("Boise State University is not available in the school list right now.");
-
-    schoolSel.value = school.id;
+    // School is fixed to Boise State. Setup no longer exposes school or global
+    // location selectors; Buster's Kitchen is the fallback for every meal.
     settings.schoolId = school.id;
     settings.schoolName = school.name;
+    const locations = await getLocations(school.id);
+    locations.sort((a, b) => Number(!supportedLocation(a)) - Number(!supportedLocation(b)) || a.name.localeCompare(b.name));
+    availableLocations = locations;
+    const busters = locations.find((l) => /buster/i.test(String(l.name || "")) && supportedLocation(l));
+    if (!busters) throw new Error("Buster's Kitchen is not available in the Boise State dining location list right now.");
+    settings.locationId = busters.id;
+    settings.locationName = busters.name;
+    saveSettings();
 
-    await refreshLocations();
-    if (loadSavedPlan()) renderWeek();
+    if (loadSavedPlan()) {
+      renderWeek();
+      const datesToRepair = [...new Set([fmtDate(new Date()), activeDate])];
+      for (const dateToRepair of datesToRepair) {
+        const savedDay = dayForDate(dateToRepair);
+        if (savedDay && savedDay.meals?.length > 0 && savedDay.meals.length < 3 &&
+            !isPandaExpressLocation(locationNameFor(settings.locationId))) {
+          await buildSingleDay(dateToRepair, true);
+        }
+      }
+    }
     setStatus("");
   } catch (err) {
     setStatus(
@@ -276,63 +284,6 @@ async function initPickers() {
     $("#retry").hidden = false;
     if (loadSavedPlan()) renderWeek();
   }
-
-  schoolSel.addEventListener("change", async () => {
-    const school = Array.from(schoolSel.options).find((o) => o.value === schoolSel.value);
-    if (!school || school.disabled) {
-      const supported = Array.from(schoolSel.options).find((o) => !o.disabled);
-      if (supported) schoolSel.value = supported.value;
-      return;
-    }
-    settings.schoolId = schoolSel.value;
-    settings.schoolName = school.textContent || "";
-    settings.locationId = null;
-    await refreshLocations();
-    saveSettings();
-  });
-  locSel.addEventListener("change", () => {
-    const location = availableLocations.find((l) => String(l.id) === String(locSel.value));
-    if (!supportedLocation(location)) {
-      const supported = availableLocations.find(supportedLocation);
-      if (supported) {
-        locSel.value = supported.id;
-        settings.locationId = supported.id;
-        settings.locationName = supported.name;
-        saveSettings();
-      }
-      return;
-    }
-    settings.locationId = locSel.value;
-    settings.locationName = location?.name || "";
-    saveSettings();
-  });
-}
-
-async function refreshLocations() {
-  const locSel = $("#location");
-  locSel.replaceChildren(h("option", {}, "Loading…"));
-  const locs = await getLocations(settings.schoolId);
-  locs.sort((a, b) => Number(!supportedLocation(a)) - Number(!supportedLocation(b)) || a.name.localeCompare(b.name));
-  availableLocations = locs;
-  locSel.replaceChildren(...locs.map((l) => {
-    const supported = supportedLocation(l);
-    return h("option", {
-      value: l.id,
-      disabled: !supported,
-      title: supported ? "" : "Coming soon",
-    }, supported ? l.name : comingSoonOptionLabel(l.name));
-  }));
-
-  const loc =
-    locs.find((l) => String(l.id) === String(settings.locationId) && supportedLocation(l)) ||
-    locs.find((l) => /buster/i.test(String(l.name || ""))) ||
-    locs.find(supportedLocation);
-  if (loc) {
-    locSel.value = loc.id;
-    settings.locationId = loc.id;
-    settings.locationName = loc.name;
-  }
-  saveSettings();
 }
 
 function bindGoalInputs() {
@@ -509,9 +460,26 @@ function extrasTotals(extras) {
     ...(extras?.drinks || []),
   ];
   return all.reduce((t, item) => {
-    t.calories += item.calories || 0; t.protein += item.protein || 0;
-    t.carbs += item.carbs || 0; t.fat += item.fat || 0; return t;
+    const servings = Math.max(1, Number(item.servings) || 1);
+    t.calories += (item.calories || 0) * servings; t.protein += (item.protein || 0) * servings;
+    t.carbs += (item.carbs || 0) * servings; t.fat += (item.fat || 0) * servings; return t;
   }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+}
+
+const MAX_PRODUCE_SERVINGS = 5;
+function addSelectedExtra(selected, item, type) {
+  if (type === 'fruit' || type === 'vegetable') {
+    const existing = selected.find((x) => x.name === item.name && String(x.station || '') === String(item.station || ''));
+    if (existing) {
+      if ((Number(existing.servings) || 1) >= MAX_PRODUCE_SERVINGS) return false;
+      existing.servings = (Number(existing.servings) || 1) + 1;
+    } else {
+      selected.push({ ...cloneExtra(item), servings: 1 });
+    }
+    return true;
+  }
+  selected.push(cloneExtra(item));
+  return true;
 }
 
 function combinedTotals(mainTotals, extras) {
@@ -631,13 +599,20 @@ function shiftUnusedCaloriesToLaterMeal(day, meal, calories) {
 }
 
 function addExtraWithoutReplanning(day, meal, item, type, selected) {
-  selected.push(cloneExtra(item));
+  if (!addSelectedExtra(selected, item, type)) return 0;
   manualMealTotals(meal);
   return item.calories || 0;
 }
 
 function requestExtraAdd(day, meal, item, type, label, selected) {
   if (isPastDate(day.date) || isMealEaten(day, meal)) return;
+  if (type === 'fruit' || type === 'vegetable') {
+    const same = selected.find((x) => x.name === item.name && String(x.station || '') === String(item.station || ''));
+    if (same && (Number(same.servings) || 1) >= MAX_PRODUCE_SERVINGS) {
+      setStatus(`${item.name} is limited to ${MAX_PRODUCE_SERVINGS} servings per meal.`, 'error');
+      return;
+    }
+  }
   // Manual planning must remain manual. Adding an extra never invokes the AI optimizer.
   if (meal.result?.manual || settings.planningStyle === 'manual') {
     const projected = currentMealTotalCalories(meal) + Number(item.calories || 0);
@@ -650,7 +625,7 @@ function requestExtraAdd(day, meal, item, type, label, selected) {
     openExtraOverflowDialog(day, meal, item, type, label, selected, over);
     return;
   }
-  selected.push(cloneExtra(item));
+  addSelectedExtra(selected, item, type);
   recomputeMeal(day, meal);
   renderWeek(); saveSavedPlan();
 }
@@ -663,7 +638,7 @@ function openExtraOverflowDialog(day, meal, item, type, label, selected, over) {
   const close = () => overlay.remove();
   const addAfterRemoval = (option) => {
     removeMealItemForExtra(day, meal, option);
-    selected.push(cloneExtra(item));
+    addSelectedExtra(selected, item, type);
     manualMealTotals(meal);
     close(); renderWeek(); saveSavedPlan();
   };
@@ -672,7 +647,7 @@ function openExtraOverflowDialog(day, meal, item, type, label, selected, over) {
     h('span', { class: 'extra-removal-stats' }, `${Math.round(option.protein)}g protein · ${Math.round(option.calories)} cal`)
   ));
   const override = h('button', { type: 'button', class: 'primary extra-overflow-override', onclick: () => {
-    selected.push(cloneExtra(item));
+    addSelectedExtra(selected, item, type);
     manualMealTotals(meal);
     shiftCaloriesToLaterMeal(day, meal, over);
     close(); renderWeek(); saveSavedPlan();
@@ -709,10 +684,9 @@ function renderProduceAdder(day, meal, type, label, icon, options) {
     select.value = '';
     requestExtraAdd(day, meal, item, type, label, selected);
   }}, '+ Add');
-  const rows = selected.length ? selected.map((item, i) => h('div',{class:'drink-row'},
-    h('span',{},`${item.name} · ${Math.round(item.calories)} cal${item.protein?` · ${Math.round(item.protein)}g protein`:''}`),
-    !locked ? h('button',{type:'button',class:'drink-remove',title:`Remove ${label.toLowerCase()}`,onclick:()=>{ selected.splice(i,1); recomputeMeal(day,meal); renderWeek(); saveSavedPlan(); }},'✕') : null
-  )) : [h('div',{class:'dim small'}, options.length ? `No ${label.toLowerCase()} added yet.` : `No ${label.toLowerCase()} options found on the DineOnCampus menu.`)];
+  const rows = selected.length
+    ? [h('div',{class:'dim small'},`${selected.reduce((n, x) => n + Math.max(1, Number(x.servings) || 1), 0)} serving(s) added above under their original station. Each produce item is capped at ${MAX_PRODUCE_SERVINGS} servings per meal; use ✕ to remove one serving.`)]
+    : [h('div',{class:'dim small'}, options.length ? `No ${label.toLowerCase()} added yet.` : `No ${label.toLowerCase()} options found on the DineOnCampus menu.`)];
   return h('div',{class:'meal-extra drink-extra'},
     h('div',{class:'extra-label'},`${icon} ${label}`),
     h('div',{class:'drink-add-row'},select,add),
@@ -828,6 +802,11 @@ function chooseOrdinaryPeriod(periods, matcher) {
   return matches.find((p) => !isNonMealVariant(p)) || matches[0] || null;
 }
 
+function hasSuspiciousSingleMealPeriod(periods) {
+  return Array.isArray(periods) && periods.length === 1 &&
+    /^(breakfast|lunch|dinner)$/i.test(String(periods[0]?.name || '').trim());
+}
+
 function selectThreeMealPeriods(periods, dateStr = activeDate) {
   const list = Array.isArray(periods) ? periods : [];
 
@@ -837,6 +816,20 @@ function selectThreeMealPeriods(periods, dateStr = activeDate) {
   // planner meal cards.
   if (isPandaExpressLocation(locationNameFor(settings.locationId)) && list.length) {
     const source = list.find((p) => /all[ -]?day/i.test(periodText(p))) || list[0];
+    return [
+      { period: source, canonical: 'breakfast', displayCanonical: 'breakfast', periodName: 'Breakfast' },
+      { period: source, canonical: 'lunch', displayCanonical: 'lunch', periodName: 'Lunch' },
+      { period: source, canonical: 'dinner', displayCanonical: 'dinner', periodName: 'Dinner' },
+    ];
+  }
+
+  // Some mobile/API sessions have received a transient response containing
+  // only one meal period (for example, Lunch). After the API client refreshes
+  // that suspicious response, keep all three planner cards accessible by using
+  // the one published period as a fallback rather than hiding Breakfast and
+  // Dinner entirely. All-day/retail menus are handled the same way.
+  if (list.length === 1) {
+    const source = list[0];
     return [
       { period: source, canonical: 'breakfast', displayCanonical: 'breakfast', periodName: 'Breakfast' },
       { period: source, canonical: 'lunch', displayCanonical: 'lunch', periodName: 'Lunch' },
@@ -932,6 +925,35 @@ function locationNameFor(id) {
   return availableLocations.find((x) => String(x.id) === String(id))?.name || settings.locationName || 'Dining location';
 }
 
+function addBustersStaticFoods(stations, locationId) {
+  const locationName = locationNameFor(locationId);
+  if (!/buster\s*['’]?s kitchen/i.test(String(locationName))) return stations;
+
+  // These are static estimates for foods served at Buster's but missing from
+  // the DineOnCampus feed. Cereal portions use manufacturer label serving sizes;
+  // soft serve uses a generic vanilla soft-serve one-cup estimate.
+  const makeStatic = (items) => items.map((x) => ({ desc:'Static Buster’s Kitchen item; nutrition is an estimate.', hasNutrition:true, ...x }));
+  const iceCream = makeStatic([
+    { name:'Soft-Serve Ice Cream (1 cup)', portion:'1 cup', calories:315, protein:8.4, carbs:51.6, fat:8.5, allergens:['Milk'], labels:['vegetarian'] },
+  ]);
+  const cereals = makeStatic([
+    { name:'Cheerios', portion:'1 1/2 cups', calories:140, protein:5, carbs:29, fat:2.5, allergens:[], labels:['vegetarian'] },
+    { name:'Lucky Charms', portion:'1 cup', calories:140, protein:3, carbs:30, fat:2, allergens:[], labels:['vegetarian'] },
+    { name:'Golden Grahams', portion:'1 cup', calories:150, protein:2, carbs:34, fat:2, allergens:['Wheat'], labels:['vegetarian'] },
+    { name:'Cinnamon Toast Crunch', portion:'1 cup', calories:170, protein:2, carbs:34, fat:4, allergens:['Wheat'], labels:['vegetarian'] },
+    { name:'Froot Loops', portion:'1 cup', calories:150, protein:2, carbs:34, fat:1.5, allergens:['Wheat'], labels:['vegetarian'] },
+  ]);
+  const addToStation = (stationName, items) => {
+    let group = stations.find((x) => String(x.station || '').toLowerCase() === stationName.toLowerCase());
+    if (!group) { group = { station:stationName, items:[] }; stations.push(group); }
+    const existing = new Set((group.items || []).map((x) => String(x.name).toLowerCase()));
+    group.items.push(...items.filter((x) => !existing.has(x.name.toLowerCase())));
+  };
+  addToStation('Bake', iceCream);
+  addToStation('Cereals', cereals);
+  return stations;
+}
+
 async function buildMealAtLocation(dateStr, canonical, budget, locationId, usage = new Map(), options = {}) {
   // Use an already-selected published period when one is available. This is
   // critical on weekends: Breakfast and Lunch can be two planner cards that
@@ -943,9 +965,21 @@ async function buildMealAtLocation(dateStr, canonical, budget, locationId, usage
     period = selectPeriodForMeal(periods, canonical, dateStr);
   }
   if (!period) throw new Error(`No ${canonical} menu is published at ${locationNameFor(locationId)} for this date.`);
-  const stations = isPandaExpressLocation(locationNameFor(locationId))
+  let stations = isPandaExpressLocation(locationNameFor(locationId))
     ? getPandaExpressMenu()
-    : await getMenu(locationId, dateStr, period.id);
+    : addBustersStaticFoods(await getMenu(locationId, dateStr, period.id), locationId);
+  // Normalize the static cereal items into a dedicated group even if an older
+  // saved/API station group happened to contain an item with the same name.
+  const cerealNames = new Set(['cheerios','lucky charms','golden grahams','cinnamon toast crunch','froot loops']);
+  const cerealItems = [];
+  for (const group of stations) {
+    group.items = (group.items || []).filter((item) => {
+      if (cerealNames.has(String(item.name || '').toLowerCase())) { cerealItems.push(item); return false; }
+      return true;
+    });
+  }
+  stations = stations.filter((group) => (group.items || []).length);
+  if (cerealItems.length) stations.push({ station:'Cereals', items:cerealItems.map((item) => ({ ...item, station:'Cereals' })) });
   const extras = buildMealExtras(stations);
   const mainBudget = budgetAfterExtras(budget, extras);
   const pool = buildCandidatePool(stations, { ...prefs(), mealCanonical: canonical });
@@ -1034,8 +1068,9 @@ async function buildWeek(manualOverride = null) {
         date: dateStr,
         label: dayLabel(d),
         meals,
-        note:
-          coverage < 0.85
+        note: hasSuspiciousSingleMealPeriod(periods)
+          ? "The menu service returned only one meal period, so that menu is temporarily reused for Breakfast, Lunch, and Dinner. Check again later for the full schedule."
+          : coverage < 0.85
             ? "Only some meals are published for this day, so the plan covers less than your full daily target."
             : null,
       });
@@ -1135,12 +1170,12 @@ function shiftActiveDate(delta) {
   setActiveDate(fmtDate(d));
 }
 
-async function buildSingleDay(dateStr) {
+async function buildSingleDay(dateStr, forceRefreshPeriods = false) {
   if (!settings.locationId) { setStatus("Pick a school and dining location first.", "error"); return; }
   const d = new Date(`${dateStr}T12:00:00`);
   setStatus(`Planning ${dayLabel(d)}…`);
   try {
-    const periods = await getPeriods(settings.locationId, dateStr);
+    const periods = await getPeriods(settings.locationId, dateStr, { forceRefresh: forceRefreshPeriods });
     const dayMeals = selectThreeMealPeriods(periods, dateStr);
     if (!dayMeals.length) {
       weekPlan = weekPlan.filter((x) => x.date !== dateStr);
@@ -1156,7 +1191,7 @@ async function buildSingleDay(dateStr) {
       await new Promise(r=>setTimeout(r,100));
     }
     weekPlan=weekPlan.filter((x)=>x.date!==dateStr);
-    weekPlan.push({date:dateStr,label:dayLabel(d),meals,note:coverage<0.85?"Only some meals are published for this day, so the plan covers less than your full daily target.":null});
+    weekPlan.push({date:dateStr,label:dayLabel(d),meals,note:hasSuspiciousSingleMealPeriod(periods)?"The menu service returned only one meal period, so that menu is temporarily reused for Breakfast, Lunch, and Dinner. Check again later for the full schedule.":coverage<0.85?"Only some meals are published for this day, so the plan covers less than your full daily target.":null});
     weekPlan.sort((a,b)=>a.date.localeCompare(b.date));
     saveSavedPlan(); renderWeek(); setStatus("");
   } catch(err) { setStatus(`Something went wrong while building the plan: ${err.message}`,"error"); }
@@ -1304,13 +1339,14 @@ function renderManualFoodPicker(day, meal) {
     byStation.get(option.item.station).push(option);
   }
 
-  const choose = (option, details) => {
+  const choose = (option) => {
+    // Keep the currently expanded station group open; renderWeek restores its
+    // open state and scroll position after recalculating available options.
     addManualFood(day, meal, option.item);
-    if (details) details.open = false;
   };
 
   const foodRow = (option, details) => h('button', {
-    type:'button', class:'manual-food-row', onclick:() => choose(option, details),
+    type:'button', class:'manual-food-row', onclick:() => choose(option),
     title:`Add ${option.item.name}`
   },
     h('span',{class:'manual-food-name'},option.item.name),
@@ -1347,7 +1383,6 @@ function renderManualFoodPicker(day, meal) {
       type:'button', class:'manual-food-row',
       onclick:() => {
         requestExtraAdd(day, meal, item, key === 'fruit' ? 'fruit' : 'vegetable', label, selected);
-        details.open = false;
       },
       title:`Add ${item.name}`
     },
@@ -1607,40 +1642,71 @@ function renderMeal(day, meal) {
   const past = isPastDate(day.date);
   const future = isFutureDate(day.date);
   const byStation = new Map();
-  for (const pick of meal.result.picks) {
-    if (!byStation.has(pick.item.station)) byStation.set(pick.item.station, []);
-    byStation.get(pick.item.station).push(pick);
+  const addStationRow = (station, row) => {
+    if (!byStation.has(station)) byStation.set(station, []);
+    byStation.get(station).push(row);
+  };
+  for (const pick of meal.result.picks) addStationRow(pick.item.station, { pick, extraType:null, extraItem:null });
+  // Fruit and vegetables chosen in the add-on selectors are real foods from
+  // the source menu. Display them inside their original serving station so the
+  // visible plan matches the calories being counted.
+  for (const [type, listName] of [['fruit','fruits'],['vegetable','vegetables']]) {
+    const selected = meal.result.extras?.[listName] || [];
+    // Consolidate any repeated legacy entries into one stacked row per food.
+    const merged = new Map();
+    for (const item of selected) {
+      const key = `${item.station || 'Produce'}::${item.name}`;
+      const current = merged.get(key);
+      if (current) current.servings = Math.min(MAX_PRODUCE_SERVINGS, (Number(current.servings) || 1) + (Number(item.servings) || 1));
+      else merged.set(key, { ...item, servings: Math.min(MAX_PRODUCE_SERVINGS, Math.max(1, Number(item.servings) || 1)) });
+    }
+    if (selected.length !== merged.size || [...merged.values()].some((x) => !selected.includes(x))) {
+      meal.result.extras[listName] = [...merged.values()];
+    }
+    for (const item of meal.result.extras[listName]) {
+      addStationRow(item.station || 'Produce', { pick:{ item, servings:Math.max(1, Number(item.servings) || 1) }, extraType:type, extraItem:item });
+    }
   }
-  const stationEls = [...byStation.entries()].map(([station, picks]) => h('div', { class: 'station' },
+  const stationEls = [...byStation.entries()].map(([station, rows]) => h('div', { class: 'station' },
     h('div', { class: 'station-name' }, `📍 ${station}`),
-    ...picks.map((pick) => {
-      const swapOptions = swapOptionsForPick(meal, pick);
-      return h('div', { class: 'item' },
+    ...rows.map(({ pick, extraType, extraItem }) => {
+      const swapOptions = extraType ? [] : swapOptionsForPick(meal, pick);
+      const remove = () => {
+        if (extraType) {
+          const key = extraType === 'fruit' ? 'fruits' : 'vegetables';
+          const list = meal.result.extras?.[key] || [];
+          const index = list.indexOf(extraItem);
+          if (index >= 0) {
+            const servings = Math.max(1, Number(list[index].servings) || 1);
+            if (servings > 1) list[index].servings = servings - 1;
+            else list.splice(index, 1);
+          }
+          manualMealTotals(meal);
+          renderWeek(); saveSavedPlan();
+        } else if (settings.planningStyle === 'manual' || meal.result.manual) {
+          meal.result.picks = meal.result.picks.filter((p) => p !== pick);
+          manualMealTotals(meal);
+          renderWeek(); saveSavedPlan();
+        } else {
+          excluded.add(itemKey(pick.item.station, pick.item.name)); saveExcluded(); reoptimizeMeal(day, meal);
+        }
+      };
+      return h('div', { class: `item ${extraType ? 'produce-station-item' : ''}` },
         h('span', { class: 'servings' }, `${pick.servings}×`),
-        h('div', { class: 'item-body' }, h('div', { class: 'item-name' }, pick.item.name), h('div', { class: 'item-meta' }, [pick.item.portion, `${Math.round(pick.item.calories)} cal`, `${Math.round(pick.item.protein)}g protein`].filter(Boolean).join(' · '))),
-        !past ? h('button', { class: 'swap swap-button', title: 'Choose a direct replacement for this item', disabled: !swapOptions.length, onclick: (e) => {
+        h('div', { class: 'item-body' }, h('div', { class: 'item-name' }, pick.item.name), h('div', { class: 'item-meta' }, [extraType && pick.servings > 1 ? `${pick.item.portion || '1 serving'} × ${pick.servings}` : pick.item.portion, `${Math.round(pick.item.calories * (extraType ? pick.servings : 1))} cal`, `${Math.round(pick.item.protein * (extraType ? pick.servings : 1))}g protein`].filter(Boolean).join(' · '))),
+        !past && !extraType ? h('button', { class: 'swap swap-button', title: 'Choose a direct replacement for this item', disabled: !swapOptions.length, onclick: (e) => {
           const row = e.currentTarget.closest('.item');
           const next = row?.nextElementSibling;
           if (next?.classList.contains('swap-panel')) { next.remove(); return; }
           row?.after(renderSwapChooser(day, meal, pick));
         } }, 'Swap') : null,
-        !past ? h('button', { class: 'swap remove-item', title: 'Remove this item and recalculate the meal', onclick: () => {
-          if (settings.planningStyle === 'manual' || meal.result.manual) {
-            // Removing a food from a manual plan is a one-time plan edit.
-            // Do NOT add it to the permanent excluded-items list or manualRemovedKeys.
-            meal.result.picks = meal.result.picks.filter((p) => p !== pick);
-            manualMealTotals(meal);
-            renderWeek(); saveSavedPlan();
-          } else {
-            excluded.add(itemKey(pick.item.station, pick.item.name)); saveExcluded(); reoptimizeMeal(day, meal);
-          }
-        } }, '✕') : null
+        !past ? h('button', { class: 'swap remove-item', title: extraType ? `Remove one serving of ${extraType}` : 'Remove this item and recalculate the meal', onclick: remove }, '✕') : null
       );
     })
   ));
   const extraCards = (meal.result.manual ? [['drink','Drink','🥛']] : [['drink','Drink','🥛']]).map(([type,label,icon]) => renderExtraSelector(day, meal, type, label, icon));
   const eaten = isMealEaten(day, meal);
-  const empty = !meal.result.picks.length;
+  const empty = byStation.size === 0;
   const mealKey = `${day.date}::${meal.canonical}::${meal.periodId}`;
   const collapsed = collapsedMeals.has(mealKey);
   const toggle = h('button',{type:'button',class:'meal-collapse-toggle', 'aria-expanded': !collapsed, onclick:() => {
@@ -1677,9 +1743,44 @@ function reoptimizeMeal(day, meal) {
   saveSavedPlan();
 }
 
+function captureManualPickerUi(wrap) {
+  const state = { scrollY: window.scrollY, meals: {} };
+  wrap.querySelectorAll('.meal[data-meal]').forEach((mealEl) => {
+    const picker = mealEl.querySelector('.manual-picker');
+    if (!picker) return;
+    const key = mealEl.getAttribute('data-meal');
+    const groups = {};
+    picker.querySelectorAll('.manual-food-group').forEach((group, index) => {
+      const summary = (group.querySelector('summary')?.textContent || `group-${index}`).replace(/ · \d+$/, '');
+      groups[summary] = { open: group.open };
+    });
+    const scroll = picker.querySelector('.manual-picker-scroll');
+    state.meals[key] = { groups, scrollTop: scroll?.scrollTop || 0 };
+  });
+  return state;
+}
+
+function restoreManualPickerUi(wrap, state) {
+  if (!state) return;
+  wrap.querySelectorAll('.meal[data-meal]').forEach((mealEl) => {
+    const saved = state.meals[mealEl.getAttribute('data-meal')];
+    if (!saved) return;
+    const picker = mealEl.querySelector('.manual-picker');
+    if (!picker) return;
+    picker.querySelectorAll('.manual-food-group').forEach((group, index) => {
+      const summary = (group.querySelector('summary')?.textContent || `group-${index}`).replace(/ · \d+$/, '');
+      if (saved.groups[summary]) group.open = saved.groups[summary].open;
+    });
+    const scroll = picker.querySelector('.manual-picker-scroll');
+    if (scroll) scroll.scrollTop = saved.scrollTop;
+  });
+  window.scrollTo(window.scrollX, state.scrollY);
+}
+
 function renderWeek() {
   renderStationPreferences();
   const wrap = $("#results");
+  const pickerUiState = captureManualPickerUi(wrap);
   const day = dayForDate(activeDate);
   const d = new Date(`${activeDate}T12:00:00`);
   if (!day) {
@@ -1691,6 +1792,7 @@ function renderWeek() {
         h('button',{class:'primary',type:'button',onclick:()=>buildSingleDay(activeDate)},`Generate plan for ${isTodayDate(activeDate)?'today':dayLabel(d)}`)
       )
     );
+    restoreManualPickerUi(wrap, pickerUiState);
     return;
   }
   const dayTotals={calories:0,protein:0,carbs:0,fat:0};
@@ -1705,6 +1807,7 @@ function renderWeek() {
       h('div',{class:'day-meals'},...day.meals.map(m=>renderMeal(day,m)))
     )
   );
+  restoreManualPickerUi(wrap, pickerUiState);
 }
 
 function updatePlanningButtons() {
@@ -1748,8 +1851,8 @@ function bindPlanMode() {
 }
 
 /* ---- exercise -------------------------------------------------------- */
-const ACTIVITY_DEFAULTS = { lifting: 3.5, running: 8.5, rucking: 7.0, swimming: 6.0, walking: 3.5 };
-const ACTIVITY_LABELS = { lifting:'Weight lifting', running:'Running', rucking:'Rucking', swimming:'Swimming', walking:'Walking' };
+const ACTIVITY_DEFAULTS = { lifting: 3.5, running: 8.5, rucking: 7.0, swimming: 6.0, walking: 3.5, boxing: 7.0, climbing: 8.0, cycling: 7.0, rowing: 4.8 };
+const ACTIVITY_LABELS = { lifting:'Weight lifting', running:'Running', rucking:'Rucking', swimming:'Swimming', walking:'Walking', boxing:'Boxing (moderate)', climbing:'Climbing (general)', cycling:'Cycling (general)', rowing:'Rowing (moderate)' };
 function paceToMph(value) { const n = parseFloat(value); if (!Number.isFinite(n) || n <= 0) return null; return 60 / n; }
 function runningMet(paceMinPerMile) {
   const mph = paceToMph(paceMinPerMile); if (!mph) return 8.5;

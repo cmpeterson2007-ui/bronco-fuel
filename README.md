@@ -47,3 +47,10 @@ Meal Reset Variety · 2026-09-19 · 20:20 MDT
 - Weekend plans use Breakfast, Lunch, Dinner; Breakfast/Lunch may share the published Brunch menu.
 - Meal Reset strongly prefers a different food set while allowing required repeat foods when necessary.
 - Added visible version marker in the app header.
+
+
+## v26 additions (2026-10-12)
+
+- Adds static Buster's Kitchen Bake items missing from DineOnCampus: one-cup soft-serve ice cream estimate and Cheerios, Lucky Charms, Golden Grahams, Cinnamon Toast Crunch, and Froot Loops. Values are estimates based on USDA FoodData Central and product-label serving information; actual dispenser portions and product labels can differ.
+- Preserves open manual food-picker groups and their internal scroll position when recalculating the meal after an item is added.
+- Adds boxing, climbing, cycling, and rowing exercise choices using general/moderate MET estimates from the 2024 Adult Compendium of Physical Activities.

@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="app-version" aria-label="Bronco Fuel build version">Guardrails + Supported Dining v25 · 2026-10-05 · 15:20 MDT</div>
+  <div class="app-version" aria-label="Bronco Fuel build version">Exact Boise State School Selection v29 · 2026-10-13 · 15:35 MDT</div>
   <header class="app-head">
     <div class="head-top">
       <div><h1>🍽️ Bronco Fuel</h1><p class="tagline">Hit your macros with what the dining hall is actually serving.</p></div>
@@ -31,14 +31,7 @@
     <details class="card" open id="setup">
       <summary>Setup &amp; goals</summary>
 
-      <div class="field-row">
-        <label>School
-          <select id="school"></select>
-        </label>
-        <label>Dining location
-          <select id="location"></select>
-        </label>
-      </div>
+      <p class="dim small">School: Boise State University. Default dining location: Buster's Kitchen. You can choose a different dining location for an individual meal from that meal's selector.</p>
 
       <div class="field-row">
         <label>Planning period
@@ -115,7 +108,7 @@
         <div class="field-row">
           <label>Date<input id="exercise-date" type="date" required /></label>
           <label>Activity<select id="exercise-activity">
-            <option value="lifting">Weight lifting</option><option value="running">Running</option><option value="rucking">Rucking</option><option value="swimming">Swimming</option><option value="walking">Walking</option>
+            <option value="lifting">Weight lifting</option><option value="running">Running</option><option value="rucking">Rucking</option><option value="swimming">Swimming</option><option value="walking">Walking</option><option value="boxing">Boxing (moderate)</option><option value="climbing">Climbing (general)</option><option value="cycling">Cycling (general)</option><option value="rowing">Rowing (moderate)</option>
           </select></label>
         </div>
         <div class="field-row">
@@ -156,10 +149,10 @@
     Nutrition values are the cafeteria’s own estimates — treat them as a guide, not gospel.
   </footer>
 
-  <script type="module" src="js/app.js?v=20261005-v25"></script>
+  <script type="module" src="js/app.js?v=20261013-v29"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js?v=20261005-v25', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js?v=20261013-v29', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {}));
     }
   </script>
 </body>
