@@ -1,5 +1,6 @@
 import { getSchools, getLocations, getPeriods, getMenu } from "./api.js";
 import { getPandaExpressMenu, isPandaExpressLocation } from "./panda.js";
+import { getChickFilAMenu, isChickFilALocation } from "./chick-fil-a.js";
 import {
   buildCandidatePool,
   optimizeMeal,
@@ -41,7 +42,7 @@ let excluded = new Set(JSON.parse(localStorage.getItem("bf.excluded") || "[]"));
 let weekPlan = []; // all generated day plans retained locally
 let availableLocations = [];
 const collapsedMeals = new Set();
-const BUILD_VERSION = 'Exact Boise State School Selection v29 · 2026-10-13 · 15:35 MDT';
+const BUILD_VERSION = 'Reversible Meal Adjustments v32 · 2026-10-19 · 09:45 MDT';
 let activeDate = localStorage.getItem("bf.activeDate") || fmtDate(new Date());
 const PLAN_STORAGE_KEY = "bf.savedPlan";
 function planStorageKey(style = settings.planningStyle || "auto") { return `${PLAN_STORAGE_KEY}.${style}`; }
@@ -223,6 +224,7 @@ const SUPPORTED_LOCATION_TESTS = [
   { re: /buster/i, label: "Buster's Kitchen" },
   { re: /southfork/i, label: "SouthFork Dining" },
   { re: /panda\s*express/i, label: "Panda Express" },
+  { re: /chick\s*[- ]?fil\s*[- ]?a/i, label: "Chick-fil-A" },
 ];
 
 function isSupportedSchool(school) {
@@ -269,7 +271,8 @@ async function initPickers() {
       for (const dateToRepair of datesToRepair) {
         const savedDay = dayForDate(dateToRepair);
         if (savedDay && savedDay.meals?.length > 0 && savedDay.meals.length < 3 &&
-            !isPandaExpressLocation(locationNameFor(settings.locationId))) {
+            !isPandaExpressLocation(locationNameFor(settings.locationId)) &&
+            !isChickFilALocation(locationNameFor(settings.locationId))) {
           await buildSingleDay(dateToRepair, true);
         }
       }
@@ -441,9 +444,14 @@ function cloneExtra(item) {
   return item ? { ...item, hasNutrition: true } : null;
 }
 
-function buildMealExtras(stations) {
-  const fruits = produceOptions(stations, 'fruit');
-  const vegetables = produceOptions(stations, 'vegetable');
+function buildMealExtras(stations, locationName = '') {
+  // Dedicated produce add-ons are only useful at Buster's and SouthFork,
+  // where produce is served as part of the dining-hall line. Retail/restaurant
+  // menus keep their normal menu items (e.g. Chick-fil-A Fruit Cup) without
+  // a separate fruit/vegetable add-on picker.
+  const allowProduceAddons = /buster\s*['’]?s kitchen|south\s*fork/i.test(String(locationName));
+  const fruits = allowProduceAddons ? produceOptions(stations, 'fruit') : [];
+  const vegetables = allowProduceAddons ? produceOptions(stations, 'vegetable') : [];
   const drinks = drinkOptions();
   return {
     fruits: [],
@@ -591,6 +599,13 @@ function shiftUnusedCaloriesToLaterMeal(day, meal, calories) {
     const oldBudget = Number(laterMeal.budget?.calories) || 0;
     laterMeal.budget.calories = oldBudget + remaining;
     laterMeal.calorieAdjustment = `* This meal has been adjusted because ${meal.periodName} used ${remaining.toLocaleString()} fewer calories than planned.`;
+    laterMeal.calorieAdjustmentSource = {
+      type: 'underallocation',
+      sourceKey: mealRecordKey(day, meal),
+      sourcePeriodName: meal.periodName,
+      plannedCalories: Number(meal.budget?.calories) || 0,
+      transferredCalories: remaining,
+    };
     remaining = 0;
   }
   if (remaining > 0) {
@@ -814,8 +829,8 @@ function selectThreeMealPeriods(periods, dateStr = activeDate) {
   // DineOnCampus period is not always labeled consistently, so once the user
   // selects Panda we deliberately expose the same static menu to all three
   // planner meal cards.
-  if (isPandaExpressLocation(locationNameFor(settings.locationId)) && list.length) {
-    const source = list.find((p) => /all[ -]?day/i.test(periodText(p))) || list[0];
+  if (isPandaExpressLocation(locationNameFor(settings.locationId)) || isChickFilALocation(locationNameFor(settings.locationId))) {
+    const source = list.find((p) => /all[ -]?day/i.test(periodText(p))) || list[0] || { id: 'static-all-day-menu', name: 'All Day', slug: 'all-day' };
     return [
       { period: source, canonical: 'breakfast', displayCanonical: 'breakfast', periodName: 'Breakfast' },
       { period: source, canonical: 'lunch', displayCanonical: 'lunch', periodName: 'Lunch' },
@@ -960,14 +975,20 @@ async function buildMealAtLocation(dateStr, canonical, budget, locationId, usage
   // intentionally share the same published Brunch period. Re-querying by the
   // synthetic card name can otherwise reject a perfectly valid menu.
   let period = options.period || null;
+  const selectedLocationName = locationNameFor(locationId);
   if (!period) {
     const periods = await getPeriods(locationId, dateStr);
     period = selectPeriodForMeal(periods, canonical, dateStr);
+    if (!period && (isPandaExpressLocation(selectedLocationName) || isChickFilALocation(selectedLocationName))) {
+      period = { id: 'static-all-day-menu', name: 'All Day', slug: 'all-day' };
+    }
   }
-  if (!period) throw new Error(`No ${canonical} menu is published at ${locationNameFor(locationId)} for this date.`);
-  let stations = isPandaExpressLocation(locationNameFor(locationId))
+  if (!period) throw new Error(`No ${canonical} menu is published at ${selectedLocationName} for this date.`);
+  let stations = isPandaExpressLocation(selectedLocationName)
     ? getPandaExpressMenu()
-    : addBustersStaticFoods(await getMenu(locationId, dateStr, period.id), locationId);
+    : isChickFilALocation(selectedLocationName)
+      ? getChickFilAMenu()
+      : addBustersStaticFoods(await getMenu(locationId, dateStr, period.id), locationId);
   // Normalize the static cereal items into a dedicated group even if an older
   // saved/API station group happened to contain an item with the same name.
   const cerealNames = new Set(['cheerios','lucky charms','golden grahams','cinnamon toast crunch','froot loops']);
@@ -980,7 +1001,7 @@ async function buildMealAtLocation(dateStr, canonical, budget, locationId, usage
   }
   stations = stations.filter((group) => (group.items || []).length);
   if (cerealItems.length) stations.push({ station:'Cereals', items:cerealItems.map((item) => ({ ...item, station:'Cereals' })) });
-  const extras = buildMealExtras(stations);
+  const extras = buildMealExtras(stations, selectedLocationName);
   const mainBudget = budgetAfterExtras(budget, extras);
   const pool = buildCandidatePool(stations, { ...prefs(), mealCanonical: canonical });
   const manual = options.manual === true;
@@ -1026,7 +1047,9 @@ async function buildWeek(manualOverride = null) {
       const d = new Date();
       d.setDate(d.getDate() + i);
       const dateStr = fmtDate(d);
-      setStatus(`Planning ${dayLabel(d)} (${i + 1}/${daysToPlan})…`);
+      setStatus(manual
+        ? `Gathering data from DineOnCampus for ${dayLabel(d)} (${i + 1}/${daysToPlan})…`
+        : `Planning ${dayLabel(d)} (${i + 1}/${daysToPlan})…`);
 
       let periods;
       try {
@@ -1112,6 +1135,17 @@ function mealHistory() { try { return JSON.parse(localStorage.getItem("bf.mealHi
 function saveMealHistory(records) { localStorage.setItem("bf.mealHistory", JSON.stringify(records.slice(-500))); }
 function mealRecordKey(day, meal) { return `${day.date}::${meal.canonical}::${meal.periodId}`; }
 function isMealEaten(day, meal) { return mealHistory().some((r) => r.key === mealRecordKey(day, meal)); }
+function calorieAdjustmentText(meal) {
+  const source = meal.calorieAdjustmentSource;
+  if (source?.type === 'underallocation' && source.sourceKey) {
+    const record = mealHistory().find((r) => r.key === source.sourceKey);
+    if (record) {
+      const unused = Math.max(0, Math.round((Number(source.plannedCalories) || 0) - (Number(record.calories) || 0)));
+      if (unused > 0) return `* This meal has been adjusted because ${source.sourcePeriodName} used ${unused.toLocaleString()} fewer calories than planned.`;
+    }
+  }
+  return meal.calorieAdjustment || '';
+}
 function snapshotMeal(day, meal) {
   return {
     key: mealRecordKey(day, meal), date: day.date, label: day.label, periodName: meal.periodName,
@@ -1125,9 +1159,41 @@ function snapshotMeal(day, meal) {
     ]
   };
 }
+function reverseUnusedCaloriesFromMeal(day, meal) {
+  const sourceKey = mealRecordKey(day, meal);
+  const historyRecord = mealHistory().find((record) => record.key === sourceKey);
+
+  // Undo the exact transfer made when this meal was marked eaten. The transfer
+  // metadata lives on the receiving meal, so this also clears its explanation.
+  for (const laterDay of weekPlan) {
+    for (const laterMeal of (laterDay.meals || [])) {
+      const source = laterMeal.calorieAdjustmentSource;
+      if (source?.type !== 'underallocation' || source.sourceKey !== sourceKey) continue;
+
+      const transferred = Math.max(0, Math.round(
+        Number(source.transferredCalories) ||
+        Number(meal.calorieUnderallocationMoved) ||
+        ((Number(source.plannedCalories) || 0) - (Number(historyRecord?.calories) || 0))
+      ));
+      if (transferred > 0) {
+        laterMeal.budget = laterMeal.budget || {};
+        laterMeal.budget.calories = Math.max(0, (Number(laterMeal.budget.calories) || 0) - transferred);
+      }
+      delete laterMeal.calorieAdjustmentSource;
+      // This adjustment's banner is specifically tied to the removed transfer.
+      laterMeal.calorieAdjustment = '';
+      break;
+    }
+  }
+  meal.calorieUnderallocationMoved = 0;
+}
+
 function toggleMealEaten(day, meal, checked) {
   if (isPastDate(day.date) || isFutureDate(day.date)) return;
-  const records = mealHistory().filter((r) => r.key !== mealRecordKey(day, meal));
+  const currentHistory = mealHistory();
+  const sourceKey = mealRecordKey(day, meal);
+  if (!checked) reverseUnusedCaloriesFromMeal(day, meal);
+  const records = currentHistory.filter((r) => r.key !== sourceKey);
   if (checked) {
     records.push(snapshotMeal(day, meal));
 
@@ -1173,7 +1239,9 @@ function shiftActiveDate(delta) {
 async function buildSingleDay(dateStr, forceRefreshPeriods = false) {
   if (!settings.locationId) { setStatus("Pick a school and dining location first.", "error"); return; }
   const d = new Date(`${dateStr}T12:00:00`);
-  setStatus(`Planning ${dayLabel(d)}…`);
+  setStatus(settings.planningStyle === 'manual'
+    ? `Gathering data from DineOnCampus for ${dayLabel(d)}…`
+    : `Planning ${dayLabel(d)}…`);
   try {
     const periods = await getPeriods(settings.locationId, dateStr, { forceRefresh: forceRefreshPeriods });
     const dayMeals = selectThreeMealPeriods(periods, dateStr);
@@ -1216,6 +1284,7 @@ function currentMainPool(meal) {
   return buildCandidatePool(meal.stations || [], {
     ...prefs(),
     excluded: new Set(),
+    includeLowCal: true,
     mealCanonical: meal.canonical,
   });
 }
@@ -1345,11 +1414,16 @@ function renderManualFoodPicker(day, meal) {
     addManualFood(day, meal, option.item);
   };
 
-  const foodRow = (option, details) => h('button', {
+  const foodRow = (option, details, showStation = false) => h('button', {
     type:'button', class:'manual-food-row', onclick:() => choose(option),
     title:`Add ${option.item.name}`
   },
-    h('span',{class:'manual-food-name'},option.item.name),
+    showStation
+      ? h('span',{class:'manual-food-name-wrap'},
+          h('span',{class:'manual-food-name'},option.item.name),
+          h('span',{class:'manual-food-station'},option.item.station || 'Dining section')
+        )
+      : h('span',{class:'manual-food-name'},option.item.name),
     h('span',{class:'manual-food-stats'},
       h('span',{},`+${Math.round(option.item.protein)}g protein`),
       h('span',{},`+${Math.round(option.item.calories)} cal · ${Math.round(option.totals.calories)} cal / ${Math.round(option.totals.protein)}g`))
@@ -1357,7 +1431,7 @@ function renderManualFoodPicker(day, meal) {
 
   const topDetails = h('details',{class:'manual-food-group',open:true},
     h('summary',{},'Top 5 Protein options'),
-    h('div',{class:'manual-food-list'},...topFive.map(x => foodRow(x, null)))
+    h('div',{class:'manual-food-list'},...topFive.map(x => foodRow(x, null, true)))
   );
 
   const stationGroups = [...byStation.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([station, items]) => {
@@ -1406,7 +1480,7 @@ function renderManualFoodPicker(day, meal) {
   return h('div',{class:'manual-picker'},
     h('div',{class:'manual-picker-title'},'Add food',h('span',{class:'dim small'},`${options.length + extraOptions.reduce((n, g) => n + ((g.querySelector?.('.manual-food-list')?.children.length) || 0), 0)} choices`)),
     h('div',{class:'manual-picker-scroll'}, topDetails, ...stationGroups, ...extraOptions),
-    h('div',{class:'dim small manual-picker-note'},`Options over this meal's calorie${meal.budget.calories === 1 ? '' : ' '}budget are hidden. Served stations allow 1 serving; self-serve stations allow up to 3.${meal.stations?.some((g) => g.items?.some((x) => x.pandaExpress)) ? ' Panda Express orders can include up to 3 entrées + 1 side; add-ons are optional.' : ''}`)
+    h('div',{class:'dim small manual-picker-note'},`Options over this meal's calorie${meal.budget.calories === 1 ? '' : ' '}budget are hidden. Served stations allow 1 serving; self-serve stations allow up to 3.${meal.stations?.some((g) => g.items?.some((x) => x.pandaExpress)) ? ' Panda Express orders can include up to 3 entrées + 1 side; add-ons are optional.' : ''}${meal.stations?.some((g) => g.items?.some((x) => x.chickFilA)) ? ' Chick-fil-A entries use static nutrition values; combo-meal values are estimates based on medium fries and a medium fountain Coke.' : ''}`)
   );
 }
 
@@ -1727,7 +1801,7 @@ function renderMeal(day, meal) {
       ),
       meal.result.manual ? renderManualFoodPicker(day, meal) : null,
       macroBar(meal.result.totals, meal.budget),
-      meal.calorieAdjustment ? h('div', { class: `calorie-adjustment ${meal.calorieOverallocated ? 'calorie-overallocated' : ''}` }, meal.calorieAdjustment) : null,
+      calorieAdjustmentText(meal) ? h('div', { class: `calorie-adjustment ${meal.calorieOverallocated ? 'calorie-overallocated' : ''}` }, calorieAdjustmentText(meal)) : null,
       meal.calorieOverflowUnallocated ? h('div', { class: 'calorie-adjustment calorie-overallocated' }, `* ${meal.calorieOverflowUnallocated} calories could not be reallocated to a later meal.`) : null
     ),
     empty ? h('div', { class: 'dim pad' }, meal.stations.length ? 'No items fit your filters for this meal.' : 'Menu not available.') : h('div', { class: 'stations' }, ...stationEls),

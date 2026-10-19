@@ -54,3 +54,25 @@ Meal Reset Variety · 2026-09-19 · 20:20 MDT
 - Adds static Buster's Kitchen Bake items missing from DineOnCampus: one-cup soft-serve ice cream estimate and Cheerios, Lucky Charms, Golden Grahams, Cinnamon Toast Crunch, and Froot Loops. Values are estimates based on USDA FoodData Central and product-label serving information; actual dispenser portions and product labels can differ.
 - Preserves open manual food-picker groups and their internal scroll position when recalculating the meal after an item is added.
 - Adds boxing, climbing, cycling, and rowing exercise choices using general/moderate MET estimates from the 2024 Adult Compendium of Physical Activities.
+
+
+## v30 — Chick-fil-A static menu (2026-10-19)
+
+- Added `js/chick-fil-a.js`, a static menu based on the Boost ordering item list supplied for Bronco Fuel.
+- The menu is selected when a Chick-fil-A location is chosen, and its static all-day menu is reused for Breakfast, Lunch, and Dinner cards.
+- Item nutrition and serving sizes use Chick-fil-A's official Nutrition & Allergens guide where matching entries are available: https://www.chick-fil-a.com/nutrition-allergens
+- Combo meals are calculated estimates (entrée + medium Waffle Potato Fries + medium fountain Coke). Items whose current exact values were not available as matching guide rows are marked in source as estimates. Combo totals vary by drink and customization.
+- Visible build tag and service-worker cache are updated to v30.
+
+
+## v31 — Produce, Status & Protein Labels (2026-10-19)
+- Separate fruit and vegetable add-on pickers are available only for Buster's Kitchen and SouthFork.
+- Manual planning status now explains that Bronco Fuel is gathering data from DineOnCampus.
+- Underallocation notices reference the current saved eaten-meal calorie total instead of relying only on a stale number.
+- Top-five protein suggestions display a subdued dining-station label.
+
+
+## v32 — Reversible Meal Adjustments (2026-10-19)
+- Unchecking a meal as eaten reverses the unused-calorie transfer from the receiving meal's budget.
+- Removes the adjustment notice tied to that transfer, and allows the source meal to be checked again without stale transfer state.
+- Visible build tag and service-worker cache are updated to v32.

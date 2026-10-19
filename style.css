@@ -128,6 +128,8 @@ legend { font-size: 0.82rem; font-weight: 700; color: var(--dim); padding: 0 6px
 .manual-food-row:hover { background:var(--bg); }
 .manual-food-row:active { transform:scale(.995); }
 .manual-food-name { flex:1; min-width:0; font-size:.84rem; font-weight:700; line-height:1.15; }
+.manual-food-name-wrap { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+.manual-food-station { color:var(--dim); opacity:.78; font-size:.66rem; font-weight:500; line-height:1.1; }
 .manual-food-stats { flex:0 0 auto; display:flex; flex-direction:column; align-items:flex-end; gap:0; color:var(--dim); font-size:.66rem; line-height:1.2; text-align:right; white-space:nowrap; }
 .manual-food-stats span:first-child { color:var(--good); font-weight:800; }
 

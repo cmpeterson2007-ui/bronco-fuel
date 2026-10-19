@@ -35,7 +35,7 @@ export function buildCandidatePool(stations, prefs) {
   const favs = (prefs.favoriteStations?.[prefs.mealCanonical] || []).map((s) => String(s).trim().toLowerCase());
   for (const { station, items } of stations) {
     for (const item of items) {
-      if (!item.hasNutrition || item.calories < MIN_ITEM_CALORIES) continue;
+      if (!item.hasNutrition || (item.calories < MIN_ITEM_CALORIES && !(prefs.includeLowCal && item.chickFilALowCal))) continue;
       // La Mesa's DineOnCampus feed often lists a generic "Torta" even when
       // the assembled sandwich is not actually served. Keep real burritos and
       // quesadillas, but never put the generic torta entry in the roster.

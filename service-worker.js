@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bronco-fuel-v20261013-29';
+const CACHE_NAME = 'bronco-fuel-v20261019-32';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -7,10 +7,11 @@ const APP_SHELL = [
   '/icon.svg',
   '/icon-192.png',
   '/icon-512.png',
-  '/js/app.js?v=20261013-v29',
+  '/js/app.js?v=20261019-v32',
   '/js/api.js',
   '/js/planner.js',
-  '/js/panda.js'
+  '/js/panda.js',
+  '/js/chick-fil-a.js'
 ];
 
 self.addEventListener('install', (event) => {
